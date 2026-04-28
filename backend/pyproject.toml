@@ -1,0 +1,54 @@
+# =============================================================================
+# pyproject.toml — Project Configuration
+# =============================================================================
+# WHAT IS THIS?
+# This file tells Python what your project is called, what version it is,
+# and what external libraries (dependencies) it needs to run.
+# Think of it as a "shopping list" for your project's tools.
+#
+# WHY pyproject.toml?
+# It's the modern Python standard (PEP 621) replacing setup.py and requirements.txt.
+# =============================================================================
+
+[project]
+name = "job-agent"
+version = "0.1.0"
+description = "AI-powered autonomous job application agent"
+requires-python = ">=3.11"
+
+# These are the external libraries our backend needs
+dependencies = [
+    # --- Web Framework ---
+    "fastapi>=0.115.0",           # The web framework — handles HTTP requests/responses
+    "uvicorn[standard]>=0.30.0",  # ASGI server — actually runs the FastAPI app
+    
+    # --- Database ---
+    "sqlalchemy>=2.0.0",          # ORM — lets us talk to the database using Python objects
+    "aiosqlite>=0.20.0",          # Async SQLite driver — makes SQLite work with async/await
+    "alembic>=1.14.0",            # Database migrations — version control for your database schema
+    
+    # --- Authentication ---
+    "python-jose[cryptography]>=3.3.0",  # JWT token creation/verification
+    "passlib[bcrypt]>=1.7.4",            # Password hashing — never store plain passwords!
+    "bcrypt>=4.0.0",                     # Bcrypt algorithm for password hashing
+    
+    # --- Data Validation ---
+    "pydantic>=2.0.0",                   # Data validation — ensures API data is correct
+    "pydantic-settings>=2.0.0",          # Settings management — reads from .env files
+    
+    # --- HTTP Client ---
+    "httpx>=0.27.0",              # Async HTTP client — for calling Pollinations API and scraping
+    
+    # --- File Processing ---
+    "python-multipart>=0.0.9",    # Handles file uploads in FastAPI
+    
+    # --- Utilities ---
+    "python-dotenv>=1.0.0",       # Reads .env files for configuration
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",              # For testing FastAPI endpoints
+]
