@@ -22,43 +22,43 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt
 
 from app.config import settings
 
 
 # --- Password Hashing ---
-# CryptContext manages the hashing algorithm (bcrypt) and handles:
-# - Hashing passwords for storage
-# - Verifying passwords during login
-# - Auto-upgrading old hashes if you change algorithms later
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# We use bcrypt directly (not passlib) because passlib has a known
+# compatibility bug with bcrypt>=4.1. Using bcrypt directly is simpler
+# and avoids the issue entirely.
 
 
 def hash_password(password: str) -> str:
     """
-    Hash a plain-text password for safe storage.
+    Hash a plain-text password for safe storage using bcrypt.
     
-    Example:
-        hash_password("mypassword123")
-        → "$2b$12$LJ3m4ysF6K3z..." (60 characters, irreversible)
+    How it works:
+    1. Generate a random "salt" (random bytes mixed into the hash)
+    2. Hash the password + salt together
+    3. Return the hash (which includes the salt, so we can verify later)
     
     The same password produces DIFFERENT hashes each time (due to random salt).
-    This means even if two users have the same password, their hashes differ.
     """
-    return pwd_context.hash(password)
+    password_bytes = password.encode("utf-8")
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password_bytes, salt)
+    return hashed.decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """
-    Check if a plain-text password matches a hashed password.
+    Check if a plain-text password matches a stored bcrypt hash.
     Used during login to verify the user's password.
-    
-    Example:
-        verify_password("mypassword123", "$2b$12$LJ3m4ys...")  → True
-        verify_password("wrongpassword", "$2b$12$LJ3m4ys...")  → False
     """
-    return pwd_context.verify(plain_password, hashed_password)
+    return bcrypt.checkpw(
+        plain_password.encode("utf-8"),
+        hashed_password.encode("utf-8"),
+    )
 
 
 # --- JWT Token Creation ---
