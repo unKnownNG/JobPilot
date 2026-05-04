@@ -15,6 +15,8 @@ from app.dependencies import get_current_user
 from app.models.user import User
 from app.models.agent_run import AgentRun
 from app.agents.scout import run_scout
+from app.agents.tailor import run_tailor
+from app.agents.applier import run_applier
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
 
@@ -25,25 +27,64 @@ router = APIRouter(prefix="/agents", tags=["Agents"])
 )
 async def trigger_scout(
     min_score: float = Query(60.0, description="Minimum relevance score (0-100)"),
-    categories: Optional[str] = Query(None, description="Comma-separated categories: software-dev,data,devops"),
+    search_term: Optional[str] = Query("", description="Job search query (e.g. 'Python developer'). Leave empty to use your resume title."),
+    max_jobs: int = Query(25, le=100, description="Max jobs to fetch per source"),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Manually trigger the Scout Agent.
-    It will fetch jobs from remote job boards, score them against your resume
-    using AI, and save matching jobs to your dashboard.
+    Trigger the Scout Agent. It scrapes LinkedIn, Indeed, Glassdoor, and
+    ZipRecruiter using your resume's title and location, then uses AI to
+    score each job and saves the best matches.
     """
-    cats = categories.split(",") if categories else None
-
     try:
         result = await run_scout(
             user_id=current_user.id,
-            categories=cats,
             min_score=min_score,
+            search_term=search_term or "",
+            max_jobs=max_jobs,
         )
         return {"status": "completed", "result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Scout agent failed: {str(e)}")
+
+
+@router.post(
+    "/tailor/run",
+    summary="Run the Tailor Agent to customize resumes for approved jobs",
+)
+async def trigger_tailor(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Manually trigger the Tailor Agent.
+    It finds all jobs you've approved, rewrites your resume bullets using AI
+    to match each job description, and saves tailored versions.
+    """
+    try:
+        result = await run_tailor(user_id=current_user.id)
+        return {"status": "completed", "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Tailor agent failed: {str(e)}")
+
+
+@router.post(
+    "/applier/run",
+    summary="Run the Applier Agent to auto-apply to jobs",
+)
+async def trigger_applier(
+    max_applications: int = Query(5, le=20, description="Max applications to submit in one run"),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Trigger the Applier Agent. Opens job URLs in a headless browser,
+    finds Apply buttons, fills forms, and takes screenshots.
+    Only processes applications with status 'resume_ready'.
+    """
+    try:
+        result = await run_applier(user_id=current_user.id, max_applications=max_applications)
+        return {"status": "completed", "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Applier agent failed: {str(e)}")
 
 
 @router.get(

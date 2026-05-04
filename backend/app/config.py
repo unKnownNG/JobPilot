@@ -47,7 +47,10 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
     
     # --- Pollinations API ---
-    POLLINATIONS_BASE_URL: str = "https://text.pollinations.ai"
+    POLLINATIONS_BASE_URL: str = "https://gen.pollinations.ai/v1"
+    # Seed tier API key from https://enter.pollinations.ai
+    # Leave empty for free tier (rate-limited but functional)
+    POLLINATIONS_API_KEY: str = ""
     
     # --- File Storage ---
     STORAGE_DIR: str = "./data/storage"

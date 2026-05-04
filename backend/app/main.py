@@ -86,8 +86,14 @@ app.add_middleware(
 )
 
 
+from fastapi.staticfiles import StaticFiles
+
 # --- Mount API Router ---
 app.include_router(api_router)
+
+# --- Mount Static Files for Screenshots ---
+storage_dir = Path(settings.STORAGE_DIR)
+app.mount("/storage", StaticFiles(directory=storage_dir), name="storage")
 
 
 # --- Root Endpoint ---

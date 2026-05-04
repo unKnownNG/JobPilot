@@ -2,35 +2,41 @@
 
 import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth-context";
-import { jobs, applications, type JobResponse, type ApplicationResponse } from "@/lib/api";
+import { jobs, applications, agents, type JobResponse, type ApplicationResponse, type AgentRun } from "@/lib/api";
 import JobsView from "@/components/jobs-view";
 import ApplicationsView from "@/components/applications-view";
 import ResumeView from "@/components/resume-view";
 import OverviewView from "@/components/overview-view";
+import AgentsView from "@/components/agents-view";
 
 const NAV = [
-  { id: "overview", label: "Overview", d: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" },
-  { id: "jobs", label: "Jobs", d: "M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" },
+  { id: "overview",     label: "Overview",     d: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" },
+  { id: "jobs",         label: "Jobs",         d: "M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" },
   { id: "applications", label: "Applications", d: "M22 2L11 13M22 2l-7 20-4-9-9-4z" },
-  { id: "resume", label: "Resume", d: "M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8" },
+  { id: "resume",       label: "Resume",       d: "M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8" },
+  { id: "agents",       label: "AI Agents",    d: "M12 2a5 5 0 015 5v3a5 5 0 01-10 0V7a5 5 0 015-5zM4 20c0-4 3.6-7 8-7s8 3 8 7" },
 ] as const;
 type Tab = (typeof NAV)[number]["id"];
 
 export default function Dashboard() {
   const { user, logout } = useAuth();
   const [tab, setTab] = useState<Tab>("overview");
-  const [jobList, setJobList] = useState<JobResponse[]>([]);
-  const [appList, setAppList] = useState<ApplicationResponse[]>([]);
-  const [jobStats, setJobStats] = useState<Record<string, number>>({});
+  const [jobList, setJobList]     = useState<JobResponse[]>([]);
+  const [appList, setAppList]     = useState<ApplicationResponse[]>([]);
+  const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
+  const [jobStats, setJobStats]   = useState<Record<string, number>>({});
   const [appFunnel, setAppFunnel] = useState<Record<string, number>>({});
-  const [open, setOpen] = useState(true);
+  const [open, setOpen]           = useState(true);
 
-  useEffect(() => {
+  const load = () => {
     jobs.list().then(setJobList).catch(console.error);
     applications.list().then(setAppList).catch(console.error);
     jobs.stats().then((s) => setJobStats(s.by_status)).catch(console.error);
     applications.analytics().then((a) => setAppFunnel(a.funnel)).catch(console.error);
-  }, []);
+    agents.runs().then(setAgentRuns).catch(console.error);
+  };
+
+  useEffect(() => { load(); }, []);
 
   const refreshJobs = () => {
     jobs.list().then(setJobList).catch(console.error);
@@ -48,7 +54,7 @@ export default function Dashboard() {
         {/* Logo */}
         <div className="h-16 flex items-center gap-3 px-5">
           <div className="w-9 h-9 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4.5 h-4.5 text-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-[18px] h-[18px] text-primary">
               <path d="M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2zM16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16" />
             </svg>
           </div>
@@ -67,10 +73,22 @@ export default function Dashboard() {
                 <path d={item.d} />
               </svg>
               {open && <span>{item.label}</span>}
+              {/* Badge: show pending jobs count on Jobs tab */}
+              {open && item.id === "jobs" && jobList.filter(j => j.status === "discovered").length > 0 && (
+                <span className="ml-auto text-[10px] font-bold bg-warning/20 text-warning px-1.5 py-0.5 rounded-full">
+                  {jobList.filter(j => j.status === "discovered").length}
+                </span>
+              )}
+              {open && item.id === "applications" && appList.filter(a => a.status === "resume_ready").length > 0 && (
+                <span className="ml-auto text-[10px] font-bold bg-success/20 text-success px-1.5 py-0.5 rounded-full">
+                  {appList.filter(a => a.status === "resume_ready").length}
+                </span>
+              )}
             </button>
           ))}
         </nav>
 
+        {/* User footer */}
         <div className="border-t border-border p-4">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary/30 to-accent/20 flex items-center justify-center shrink-0 text-xs font-bold text-primary ring-1 ring-primary/20">
@@ -94,6 +112,7 @@ export default function Dashboard() {
 
       {/* Main */}
       <main className="flex-1 overflow-auto">
+        {/* Topbar */}
         <header className="h-14 bg-bg/75 backdrop-blur-xl border-b border-border flex items-center justify-between px-6 sticky top-0 z-10">
           <div className="flex items-center gap-3">
             <button onClick={() => setOpen(!open)} className="text-muted-fg hover:text-fg cursor-pointer">
@@ -101,16 +120,24 @@ export default function Dashboard() {
                 <path d="M3 12h18M3 6h18M3 18h18" />
               </svg>
             </button>
-            <h1 className="text-base font-semibold capitalize text-fg">{tab}</h1>
+            <h1 className="text-base font-semibold capitalize text-fg">
+              {tab === "agents" ? "AI Agents" : tab}
+            </h1>
           </div>
-          <span className="text-xs text-muted-fg bg-muted border border-border px-3 py-1 rounded-full">{jobList.length} jobs tracked</span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-fg bg-muted border border-border px-3 py-1 rounded-full">
+              {jobList.length} jobs · {appList.length} applications
+            </span>
+          </div>
         </header>
 
+        {/* Content */}
         <div className="p-6 animate-fade-in" key={tab}>
-          {tab === "overview" && <OverviewView jobs={jobList} apps={appList} jobStats={jobStats} appFunnel={appFunnel} />}
-          {tab === "jobs" && <JobsView jobs={jobList} onRefresh={refreshJobs} />}
-          {tab === "applications" && <ApplicationsView apps={appList} onRefresh={refreshApps} />}
-          {tab === "resume" && <ResumeView />}
+          {tab === "overview"     && <OverviewView jobs={jobList} apps={appList} jobStats={jobStats} appFunnel={appFunnel} agentRuns={agentRuns} onNavigate={setTab} />}
+          {tab === "jobs"         && <JobsView jobs={jobList} onRefresh={refreshJobs} />}
+          {tab === "applications" && <ApplicationsView apps={appList} jobs={jobList} onRefresh={refreshApps} />}
+          {tab === "resume"       && <ResumeView />}
+          {tab === "agents"       && <AgentsView runs={agentRuns} onRefresh={load} />}
         </div>
       </main>
     </div>

@@ -136,6 +136,21 @@ export const resumes = {
       method: "POST",
       body: JSON.stringify({ resume_data, raw_text }),
     }),
+  upload: async (file: File): Promise<ResumeResponse> => {
+    const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${API_BASE}/resumes/upload`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `Upload failed: ${res.status}`);
+    }
+    return res.json();
+  },
   get: (id: string) => request<ResumeResponse>(`/resumes/${id}`),
   delete: (id: string) =>
     request<void>(`/resumes/${id}`, { method: "DELETE" }),
@@ -174,4 +189,37 @@ export const applications = {
       by_status: Record<string, number>;
       funnel: Record<string, number>;
     }>("/applications/stats/analytics"),
+};
+
+// --- Agents ---
+export interface AgentRun {
+  id: string;
+  agent_type: string;
+  status: string;
+  config: Record<string, unknown> | null;
+  result: Record<string, unknown> | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface AgentResult {
+  status: string;
+  result: Record<string, unknown>;
+}
+
+export const agents = {
+  runScout: (min_score = 60, search_term = "", max_jobs = 25) => {
+    const q = new URLSearchParams({ min_score: String(min_score), max_jobs: String(max_jobs) });
+    if (search_term) q.set("search_term", search_term);
+    return request<AgentResult>(`/agents/scout/run?${q}`, { method: "POST" });
+  },
+  runTailor: () => request<AgentResult>("/agents/tailor/run", { method: "POST" }),
+  runApplier: (max_applications = 5) => {
+    const q = new URLSearchParams({ max_applications: String(max_applications) });
+    return request<AgentResult>(`/agents/applier/run?${q}`, { method: "POST" });
+  },
+  runs: (agent_type?: string) => {
+    const q = agent_type ? `?agent_type=${agent_type}` : "";
+    return request<AgentRun[]>(`/agents/runs${q}`);
+  },
 };
