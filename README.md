@@ -2,8 +2,6 @@
 
 JobPilot is a local-first, full-stack application designed to automate the painful process of finding and applying for jobs. Built with **FastAPI**, **Next.js**, and powered by **free AI models**, it acts as your personal autonomous recruiter.
 
-![Dashboard Preview](https://via.placeholder.com/1000x500.png?text=JobPilot+Dashboard) *(Replace with actual screenshot)*
-
 ## 🌟 Features
 
 *   **Secure Authentication:** Local-first JWT authentication with secure `bcrypt` password hashing.
