@@ -183,6 +183,7 @@ export const applications = {
       method: "PUT",
       body: JSON.stringify(data),
     }),
+  delete: (id: string) => request<void>(`/applications/${id}`, { method: "DELETE" }),
   analytics: () =>
     request<{
       total_applications: number;

@@ -31,35 +31,75 @@ JobPilot is a monorepo separated into two distinct services:
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Getting Started & Installation
 
 ### Prerequisites
 *   [Node.js](https://nodejs.org/) (v18+)
 *   [Python](https://www.python.org/) (v3.10+)
 
-### Quick Start (Windows)
-We've included a convenient batch script to launch both servers simultaneously:
-1. Double-click the `start.bat` file in the root directory.
-2. The frontend will be available at `http://localhost:3000`.
-3. The backend API docs (Swagger UI) will be available at `http://localhost:8000/docs`.
+### Step 1: Backend Setup (Python)
 
-### Manual Setup
+Your backend is built with FastAPI and uses Playwright for browser automation.
 
-**Backend:**
-```bash
-cd backend
-python -m venv .venv
-# Activate venv: .venv\Scripts\activate (Windows) or source .venv/bin/activate (Mac/Linux)
-pip install -r requirements.txt
-python -m uvicorn app.main:app --reload --port 8000
-```
+1. **Navigate to the backend directory:**
+   ```bash
+   cd backend
+   ```
+2. **Create and Activate a Virtual Environment:**
+   ```bash
+   python -m venv venv
+   # Windows:
+   venv\Scripts\activate
+   # Mac/Linux:
+   source venv/bin/activate
+   ```
+3. **Install Python Packages:**
+   JobPilot uses `pyproject.toml` to manage dependencies. You will also need to explicitly install `playwright` for the browser agents:
+   ```bash
+   pip install -e .
+   pip install playwright
+   ```
+   *Note: If you run into issues with the above, install the core packages manually: `pip install fastapi "uvicorn[standard]" sqlalchemy aiosqlite alembic "python-jose[cryptography]" "passlib[bcrypt]" bcrypt pydantic pydantic-settings httpx python-multipart python-dotenv playwright`*
+4. **Install Playwright Browsers:**
+   Playwright requires a headless browser to automate job applications.
+   ```bash
+   playwright install chromium
+   ```
+5. **Setup Environment Variables:**
+   Duplicate the `.env.example` file and rename it to `.env`. Fill in any necessary keys (like your `POLLINATIONS_API_KEY`, if you have one).
+6. **Run Database Migrations:**
+   Ensure your SQLite database is fully set up:
+   ```bash
+   alembic upgrade head
+   ```
 
-**Frontend:**
-```bash
-cd frontend
-npm install
-npm run dev
-```
+### Step 2: Frontend Setup (Next.js)
+
+1. **Navigate to the frontend directory:**
+   ```bash
+   cd ../frontend
+   ```
+2. **Install Node Packages:**
+   ```bash
+   npm install
+   ```
+
+### Step 3: Running the Project Locally
+
+We've included a convenient batch script to launch both servers simultaneously on Windows!
+
+1. **Navigate to the root folder:**
+   ```bash
+   cd ..
+   ```
+2. **Run the start script:**
+   Double-click the **`start.bat`** file in your File Explorer, OR run it from your terminal:
+   ```bash
+   .\start.bat
+   ```
+
+This will automatically open two terminal windows (one for the backend on `http://localhost:8000` and one for the frontend).
+Open your browser and navigate to **[http://localhost:3000](http://localhost:3000)** to view the JobPilot application!
 
 ---
 

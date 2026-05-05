@@ -41,6 +41,12 @@ export default function ApplicationsView({ apps, jobs, onRefresh }: Props) {
     onRefresh();
   };
 
+  const handleDelete = async (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this application?")) return;
+    await appsApi.delete(id);
+    onRefresh();
+  };
+
   const inputCls = "w-full px-3.5 py-2.5 rounded-xl bg-muted border border-border text-sm text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all";
 
   return (
@@ -160,6 +166,11 @@ export default function ApplicationsView({ apps, jobs, onRefresh }: Props) {
                             Screenshots
                           </button>
                         )}
+                        <button onClick={() => handleDelete(app.id)}
+                          className="text-xs px-2.5 py-1.5 rounded-lg bg-danger/10 text-danger border border-danger/20 hover:bg-danger hover:text-white transition cursor-pointer ml-1"
+                          title="Delete Application">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"/></svg>
+                        </button>
                       </div>
                     </div>
 

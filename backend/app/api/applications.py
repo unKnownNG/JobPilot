@@ -157,3 +157,32 @@ async def get_analytics(
             "rejected": status_counts.get("rejected", 0),
         },
     }
+
+
+@router.delete(
+    "/{app_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete an application",
+)
+async def delete_application(
+    app_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete an application."""
+    result = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.user_id == current_user.id,
+        )
+    )
+    app = result.scalar_one_or_none()
+    
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+        
+    await db.delete(app)
+    await db.commit()
+    
+    return None
+
