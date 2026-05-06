@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=380, initial-scale=1.0">
+  <title>JobPilot</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <!-- ─── Login Screen ─── -->
+  <div id="login-screen" class="screen">
+    <div class="logo">
+      <div class="logo-icon">✈</div>
+      <h1>JobPilot</h1>
+      <p class="subtitle">AI-Powered Application Filler</p>
+    </div>
+    <form id="login-form">
+      <div class="field">
+        <label for="email">Email</label>
+        <input type="email" id="email" placeholder="you@example.com" required>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" placeholder="••••••••" required>
+      </div>
+      <button type="submit" id="login-btn" class="btn btn-primary">
+        <span class="btn-text">Sign In</span>
+        <span class="btn-loading hidden">Signing in...</span>
+      </button>
+      <p id="login-error" class="error hidden"></p>
+    </form>
+  </div>
+
+  <!-- ─── Main Screen ─── -->
+  <div id="main-screen" class="screen hidden">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-left">
+        <div class="logo-icon small">✈</div>
+        <div>
+          <h2>JobPilot</h2>
+          <p id="user-email" class="user-email"></p>
+        </div>
+      </div>
+      <button id="logout-btn" class="btn-icon" title="Sign Out">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+          <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Page Info -->
+    <div id="page-info" class="card">
+      <p class="label">Current Page</p>
+      <p id="page-title" class="page-title">Loading...</p>
+      <p id="page-url" class="page-url"></p>
+    </div>
+
+    <!-- Actions -->
+    <div class="actions">
+      <button id="scan-btn" class="btn btn-secondary">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+          <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+        </svg>
+        Scan Form Fields
+      </button>
+
+      <div id="scan-result" class="hidden">
+        <div class="card result-card">
+          <div class="result-header">
+            <span id="field-count" class="badge">0 fields</span>
+            <span id="scan-status" class="status">Ready</span>
+          </div>
+          <div id="fields-preview" class="fields-preview"></div>
+        </div>
+      </div>
+
+      <button id="fill-btn" class="btn btn-primary hidden" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+          <path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/>
+        </svg>
+        <span class="btn-text">Auto-Fill Form</span>
+        <span class="btn-loading hidden">AI is thinking...</span>
+      </button>
+    </div>
+
+    <!-- Fill Result -->
+    <div id="fill-result" class="hidden">
+      <div class="card">
+        <p id="fill-summary" class="fill-summary"></p>
+        <div id="fill-details" class="fill-details"></div>
+        <button id="log-btn" class="btn btn-success">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+            <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+            <polyline points="22 4 12 14.01 9 11.01"/>
+          </svg>
+          Log Application
+        </button>
+      </div>
+    </div>
+
+    <!-- Status Messages -->
+    <div id="status-bar" class="status-bar hidden">
+      <p id="status-message"></p>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

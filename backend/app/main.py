@@ -74,12 +74,14 @@ app = FastAPI(
 # CORS (Cross-Origin Resource Sharing) controls which websites can call your API.
 # Without this, your Next.js frontend (running on port 3000) can't call the
 # FastAPI backend (running on port 8000) — browsers block it by default.
+# Chrome extensions also need CORS access.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",     # Next.js dev server
         "http://127.0.0.1:3000",
     ],
+    allow_origin_regex=r"^chrome-extension://.*$",  # Chrome Extension
     allow_credentials=True,
     allow_methods=["*"],              # Allow all HTTP methods
     allow_headers=["*"],              # Allow all headers

@@ -265,77 +265,94 @@ export default function AgentsView({ runs, onRefresh }: Props) {
               </div>
               <h3 className="font-semibold text-fg">Applier Agent</h3>
             </div>
-            <p className="text-xs text-muted-fg">Opens job URLs in a headless browser, finds Apply buttons, fills forms, and takes screenshots.</p>
+            <p className="text-xs text-muted-fg">Uses your Chrome Extension to fill job applications from inside your real logged-in browser — no bots, no CAPTCHAs.</p>
           </div>
-          <span className={`text-[11px] font-medium px-2.5 py-1 rounded-full capitalize ${
-            applierStatus === "running" ? "bg-warning/15 text-warning" :
-            applierStatus === "done"    ? "bg-success/15 text-success" :
-            applierStatus === "error"   ? "bg-danger/15 text-danger" :
-            "bg-muted text-muted-fg border border-border"
-          }`}>{applierStatus}</span>
+          <span className="text-[11px] font-medium px-2.5 py-1 rounded-full bg-accent/15 text-accent border border-accent/20">Extension-Based</span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="bg-muted rounded-xl p-3 text-xs text-muted-fg space-y-1.5">
-            <p className="font-medium text-fg text-[13px]">Pipeline:</p>
+            <p className="font-medium text-fg text-[13px]">How it works:</p>
             <ol className="list-decimal list-inside space-y-1">
-              <li>Finds apps with status <span className="text-success">resume_ready</span></li>
-              <li>Opens job URL in headless Chromium</li>
-              <li>Clicks the <span className="text-fg">Apply</span> button</li>
-              <li>Fills in name, email, phone from your resume</li>
-              <li>Uploads your tailored resume PDF (if available)</li>
-              <li>Takes <span className="text-fg">screenshots</span> at every step</li>
+              <li>Open any job application page in Chrome</li>
+              <li>Click the <span className="text-fg font-medium">JobPilot Extension</span> icon</li>
+              <li>Extension scrapes form fields from the page</li>
+              <li>AI maps your resume data → each form field</li>
+              <li>Extension fills the form instantly in your session</li>
+              <li>Application is logged to the <span className="text-fg">Applications</span> tab</li>
             </ol>
           </div>
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs text-muted-fg font-medium block mb-1">Max applications per run: <span className="text-fg font-semibold">{maxApps}</span></label>
-              <input type="range" min="1" max="10" value={maxApps} onChange={e => setMaxApps(Number(e.target.value))}
-                className="w-full accent-warning cursor-pointer" />
-            </div>
-            <button onClick={triggerApplier} disabled={applierStatus === "running"}
-              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-warning/80 to-warning text-white text-sm font-medium disabled:opacity-50 hover:shadow-lg hover:shadow-warning/20 transition-all cursor-pointer">
-              {applierStatus === "running" ? "🚀 Applying..." : "Run Applier Agent"}
-            </button>
+          <div className="bg-muted rounded-xl p-3 text-xs text-muted-fg space-y-1.5">
+            <p className="font-medium text-fg text-[13px]">Why extension beats headless browser:</p>
+            <ul className="space-y-1">
+              {[
+                ["✅", "Already logged in to LinkedIn, Indeed, etc."],
+                ["✅", "No CAPTCHA or bot-detection issues"],
+                ["✅", "Works on React / Angular / Vue job sites"],
+                ["✅", "Human-in-the-loop — you verify before submitting"],
+                ["✅", "No Playwright crashes on Windows"],
+              ].map(([icon, text]) => (
+                <li key={text as string} className="flex items-start gap-1.5">
+                  <span>{icon}</span><span>{text}</span>
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
 
-        {applierResult && (
-          <div className={`rounded-xl p-3 text-xs ${applierResult.error ? "bg-danger/10 border border-danger/20 text-danger" : "bg-success/10 border border-success/20 text-success"}`}>
-            {applierResult.error ? (
-              <p>{String(applierResult.error)}</p>
-            ) : (
-              <div className="grid grid-cols-4 gap-2 text-center">
-                {Object.entries(applierResult).filter(([k]) => k !== "message").map(([k, v]) => (
-                  <div key={k}>
-                    <p className="text-lg font-bold text-fg">{String(v)}</p>
-                    <p className="text-muted-fg capitalize">{k}</p>
-                  </div>
-                ))}
+        {/* API Endpoints the extension calls */}
+        <div className="bg-muted/50 border border-border rounded-xl p-3">
+          <p className="text-xs font-medium text-fg mb-2.5">Backend endpoints (ready now):</p>
+          <div className="space-y-1.5">
+            {[
+              { method: "GET",  path: "/api/agents/applier/autofill-data", desc: "Fetch flat resume data for filling" },
+              { method: "POST", path: "/api/agents/applier/analyze-form",  desc: "AI maps form fields → resume values" },
+              { method: "POST", path: "/api/agents/applier/log",           desc: "Log completed application to dashboard" },
+            ].map(ep => (
+              <div key={ep.path} className="flex items-center gap-2 text-xs">
+                <span className={`font-mono font-bold px-1.5 py-0.5 rounded text-[10px] shrink-0 ${
+                  ep.method === "GET" ? "bg-success/15 text-success" : "bg-primary/15 text-primary"
+                }`}>{ep.method}</span>
+                <code className="text-muted-fg font-mono text-[11px] truncate">{ep.path}</code>
+                <span className="text-muted-fg/50 ml-auto hidden sm:block shrink-0">{ep.desc}</span>
               </div>
-            )}
+            ))}
           </div>
-        )}
+        </div>
 
-        {applierRuns.length > 0 && (
+        {/* Recent runs */}
+        {applierRuns.length > 0 ? (
           <div className="pt-2 border-t border-border">
-            <p className="text-[11px] text-muted-fg font-medium mb-2">Last {Math.min(applierRuns.length, 3)} runs</p>
-            {applierRuns.slice(0, 3).map(r => (
+            <p className="text-[11px] text-muted-fg font-medium mb-2">Recent extension runs</p>
+            {applierRuns.slice(0, 5).map(r => (
               <div key={r.id} className="flex items-center justify-between py-1.5">
                 <div className="flex items-center gap-2">
                   <StatusDot status={r.status} />
                   <span className="text-xs text-muted-fg capitalize">{r.status}</span>
+                  {r.result?.job_title && (
+                    <span className="text-xs text-fg font-medium">
+                      {String(r.result.job_title)}{r.result.company ? ` @ ${r.result.company}` : ""}
+                    </span>
+                  )}
                 </div>
                 <span className="text-[11px] text-muted-fg">
-                  {r.result ? `${r.result.applied ?? 0} applied, ${r.result.failed ?? 0} failed` : "—"} · {r.started_at ? new Date(r.started_at).toLocaleTimeString() : ""}
+                  {Array.isArray(r.result?.fields_filled)
+                    ? `${r.result.fields_filled.length} fields filled`
+                    : "—"
+                  } · {r.started_at ? new Date(r.started_at).toLocaleTimeString() : ""}
                 </span>
               </div>
             ))}
           </div>
+        ) : (
+          <p className="text-center text-xs text-muted-fg/50 py-3">
+            No applications logged yet — install the Chrome Extension to start applying!
+          </p>
         )}
       </div>
 
       {/* Full run history */}
+
       {runs.length > 0 && (
         <div className="bg-card border border-border rounded-2xl p-6 shadow-lg shadow-black/20">
           <h3 className="font-semibold text-sm text-fg mb-4">Full Agent Run History</h3>

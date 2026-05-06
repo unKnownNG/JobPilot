@@ -1,454 +1,344 @@
 # =============================================================================
-# agents/applier.py — Applier Agent (Browser-Based Application Automation)
+# agents/applier.py — Applier Agent (Extension-Based Architecture)
 # =============================================================================
-# The Applier Agent:
-#   1. Finds applications with status "resume_ready"
-#   2. Opens the job URL in a headless Chromium browser
-#   3. Takes a screenshot of the job page
-#   4. Looks for "Apply" buttons and navigates to the application form
-#   5. Attempts to fill in basic fields (name, email, phone)
-#   6. Takes a screenshot of the result
-#   7. Updates application status to "applied" or "failed_to_apply"
+# Instead of a headless browser (Playwright), the Applier Agent now works
+# as a backend API that a Chrome Extension calls:
 #
-# NOTE: Uses Playwright SYNC API in a background thread because Windows
-# doesn't support asyncio subprocess spawning inside uvicorn's event loop.
+#   1. Extension scrapes the form HTML on the current page
+#   2. Sends it to POST /api/agents/applier/analyze-form
+#   3. Backend uses LLM to map resume fields → form fields
+#   4. Extension fills the form using the returned instructions
+#   5. Extension reports the result back via POST /api/agents/applier/log
+#
+# This approach solves authentication, CAPTCHA, and bot-detection issues
+# because it runs inside the user's real browser session.
 # =============================================================================
 
-import os
-import asyncio
-import time
 from datetime import datetime, timezone
-from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
 
 from sqlalchemy import select
-from playwright.sync_api import sync_playwright, Page, TimeoutError as PWTimeout
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import async_session_factory
-import app.models  # noqa: F401 — registers all models for SQLAlchemy relationships
+from app.core.llm import llm_provider
+import app.models  # noqa: F401 — register all models
 from app.models.user import User
-from app.models.job_posting import JobPosting
-from app.models.application import Application
 from app.models.resume import MasterResume, TailoredResume
+from app.models.application import Application
+from app.models.job_posting import JobPosting
 from app.models.agent_run import AgentRun
-from app.config import settings
+from app.core.database import async_session_factory
 
 
-# Storage for screenshots
-SCREENSHOT_DIR = Path(settings.STORAGE_DIR) / "screenshots"
-SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+# ─── LLM Form Analysis ──────────────────────────────────────────────────────
 
-# Thread pool for running sync Playwright
-_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="applier")
+FORM_ANALYSIS_SYSTEM = """You are an expert at analyzing job application form HTML.
+You receive a simplified representation of form fields and the user's resume data.
+Your job is to return a JSON object mapping each form field to the correct value
+from the user's resume.
 
-# Common "Apply" button selectors (covers most job sites)
-APPLY_SELECTORS = [
-    'a:has-text("Apply")',
-    'button:has-text("Apply")',
-    'a:has-text("Apply Now")',
-    'button:has-text("Apply Now")',
-    'a:has-text("Apply for this job")',
-    'button:has-text("Submit Application")',
-    'a:has-text("Easy Apply")',
-    'button:has-text("Easy Apply")',
-    '[data-testid*="apply"]',
-    '[class*="apply-button"]',
-    '[id*="apply"]',
-]
+Rules:
+- Return ONLY valid JSON. No markdown, no explanation.
+- Use the field's id, name, or label to determine what data goes there.
+- For <select> dropdowns, choose the closest matching option value.
+- For radio buttons, choose the correct value.
+- For textareas asking "why do you want to work here" or similar, write a brief
+  2-3 sentence answer using the user's background.
+- If you cannot determine what a field needs, set its value to null.
+- For file upload fields, set value to "__RESUME_UPLOAD__" (the extension handles this).
+"""
 
-# Common form field selectors
-FIELD_SELECTORS = {
-    "name": [
-        'input[name*="name" i]',
-        'input[id*="name" i]',
-        'input[placeholder*="name" i]',
-        'input[aria-label*="name" i]',
-        'input[name*="full_name" i]',
-    ],
-    "first_name": [
-        'input[name*="first" i]',
-        'input[id*="first" i]',
-        'input[placeholder*="first" i]',
-    ],
-    "last_name": [
-        'input[name*="last" i]',
-        'input[id*="last" i]',
-        'input[placeholder*="last" i]',
-    ],
-    "email": [
-        'input[type="email"]',
-        'input[name*="email" i]',
-        'input[id*="email" i]',
-        'input[placeholder*="email" i]',
-    ],
-    "phone": [
-        'input[type="tel"]',
-        'input[name*="phone" i]',
-        'input[id*="phone" i]',
-        'input[placeholder*="phone" i]',
-    ],
-    "resume_upload": [
-        'input[type="file"][name*="resume" i]',
-        'input[type="file"][name*="cv" i]',
-        'input[type="file"][id*="resume" i]',
-        'input[type="file"][accept*="pdf"]',
-        'input[type="file"]',
-    ],
-}
+FORM_ANALYSIS_PROMPT = """Analyze this job application form and map each field to the correct value.
+
+## USER RESUME DATA:
+{resume_json}
+
+## FORM FIELDS:
+{form_fields}
+
+## JOB CONTEXT:
+Title: {job_title}
+Company: {company}
+Description: {job_description}
+
+Return a JSON object with this structure:
+{{
+  "field_mappings": [
+    {{
+      "selector": "<CSS selector or field identifier>",
+      "field_type": "input|select|textarea|radio|checkbox|file",
+      "value": "<value to fill>",
+      "confidence": "high|medium|low",
+      "reasoning": "<brief explanation>"
+    }}
+  ],
+  "unmapped_fields": [
+    {{
+      "selector": "<CSS selector>",
+      "label": "<field label text>",
+      "reason": "Could not determine the appropriate value"
+    }}
+  ],
+  "summary": "Mapped X of Y fields successfully"
+}}"""
 
 
-# ─── Sync Playwright helpers (run in thread) ─────────────────────────────────
-
-def _take_screenshot(page: Page, app_id: str, step: str) -> str:
-    """Take a screenshot and return the file path."""
-    filename = f"{app_id}_{step}_{int(time.time())}.png"
-    filepath = str(SCREENSHOT_DIR / filename)
-    page.screenshot(path=filepath, full_page=False)
-    return filepath
-
-
-def _try_fill_field(page: Page, selectors: list[str], value: str) -> bool:
-    """Try to fill a form field using multiple possible selectors."""
-    for selector in selectors:
-        try:
-            el = page.locator(selector).first
-            if el.is_visible(timeout=1000):
-                el.clear()
-                el.fill(value)
-                return True
-        except Exception:
-            continue
-    return False
-
-
-def _try_click_apply(page: Page) -> bool:
-    """Try to find and click an Apply button."""
-    for selector in APPLY_SELECTORS:
-        try:
-            el = page.locator(selector).first
-            if el.is_visible(timeout=2000):
-                el.click()
-                page.wait_for_load_state("networkidle", timeout=10000)
-                return True
-        except Exception:
-            continue
-    return False
-
-
-def _apply_to_single_job(page: Page, job_url: str, job_title: str,
-                          app_id: str, user_data: dict) -> dict:
+async def analyze_form_fields(
+    form_fields: list[dict],
+    resume_data: dict,
+    job_title: str = "",
+    company: str = "",
+    job_description: str = "",
+) -> dict:
     """
-    Attempt to apply to a single job (SYNC — runs in thread).
-    Returns a result dict with status, screenshots, and notes.
+    Use LLM to analyze form fields and map them to resume data.
+
+    Args:
+        form_fields: List of dicts describing each form field, e.g.:
+            [{"selector": "#first_name", "type": "text", "name": "first_name",
+              "label": "First Name", "required": true, "options": null}]
+        resume_data: The user's master resume data dict.
+        job_title: Title of the job being applied to.
+        company: Company name.
+        job_description: First ~500 chars of the JD.
+
+    Returns:
+        Dict with field_mappings, unmapped_fields, and summary.
     """
-    result = {
-        "status": "failed_to_apply",
-        "screenshots": [],
-        "notes": "",
-    }
+    import json
 
-    try:
-        # Step 1: Navigate to job URL
-        print(f"[APPLIER] Opening: {job_url}")
-        page.goto(job_url, wait_until="domcontentloaded", timeout=30000)
-        time.sleep(2)  # Let dynamic content load
+    # Truncate job description to save tokens
+    job_desc_truncated = (job_description or "")[:500]
 
-        # Screenshot: Job page
-        ss1 = _take_screenshot(page, app_id, "job_page")
-        result["screenshots"].append(ss1)
+    prompt = FORM_ANALYSIS_PROMPT.format(
+        resume_json=json.dumps(resume_data, indent=2)[:3000],
+        form_fields=json.dumps(form_fields, indent=2)[:3000],
+        job_title=job_title or "Unknown",
+        company=company or "Unknown",
+        job_description=job_desc_truncated or "Not provided",
+    )
 
-        # Step 2: Look for Apply button
-        clicked = _try_click_apply(page)
-        if clicked:
-            time.sleep(2)
-            ss2 = _take_screenshot(page, app_id, "apply_form")
-            result["screenshots"].append(ss2)
-            print(f"[APPLIER] Found Apply button for '{job_title}'")
-        else:
-            result["notes"] = "Could not find Apply button. Manual application needed."
-            result["status"] = "failed_to_apply"
-            print(f"[APPLIER] No Apply button found for '{job_title}'")
-            return result
+    result = await llm_provider.generate_json(
+        prompt=prompt,
+        system_prompt=FORM_ANALYSIS_SYSTEM,
+        model="openai-large",
+    )
 
-        # Step 3: Try to fill common fields
-        fields_filled = []
-        name = user_data.get("name", "")
+    if isinstance(result, dict) and "error" in result:
+        return {
+            "field_mappings": [],
+            "unmapped_fields": [],
+            "summary": f"LLM analysis failed: {result.get('raw', '')[:200]}",
+            "error": True,
+        }
 
-        if name:
-            if _try_fill_field(page, FIELD_SELECTORS["name"], name):
-                fields_filled.append("name")
-            else:
-                parts = name.split(" ", 1)
-                if _try_fill_field(page, FIELD_SELECTORS["first_name"], parts[0]):
-                    fields_filled.append("first_name")
-                if len(parts) > 1:
-                    if _try_fill_field(page, FIELD_SELECTORS["last_name"], parts[1]):
-                        fields_filled.append("last_name")
-
-        email = user_data.get("email", "")
-        if email and _try_fill_field(page, FIELD_SELECTORS["email"], email):
-            fields_filled.append("email")
-
-        phone = user_data.get("phone", "")
-        if phone and _try_fill_field(page, FIELD_SELECTORS["phone"], phone):
-            fields_filled.append("phone")
-
-        # Step 4: Try to upload resume
-        resume_path = user_data.get("resume_pdf_path", "")
-        if resume_path and os.path.exists(resume_path):
-            for selector in FIELD_SELECTORS["resume_upload"]:
-                try:
-                    el = page.locator(selector).first
-                    if el.count() > 0:
-                        el.set_input_files(resume_path)
-                        fields_filled.append("resume_upload")
-                        print(f"[APPLIER] Uploaded resume: {resume_path}")
-                        break
-                except Exception:
-                    continue
-
-        # Screenshot: Filled form
-        if fields_filled:
-            ss3 = _take_screenshot(page, app_id, "filled_form")
-            result["screenshots"].append(ss3)
-
-        result["notes"] = (
-            f"Fields filled: {', '.join(fields_filled) if fields_filled else 'none'}. "
-            "Manual review recommended before submitting."
-        )
-        result["status"] = "applied" if len(fields_filled) >= 2 else "failed_to_apply"
-        print(f"[APPLIER] '{job_title}': filled {fields_filled}, status={result['status']}")
-
-    except PWTimeout:
-        result["notes"] = "Page load timed out."
-        print(f"[APPLIER] Timeout for '{job_title}'")
-    except Exception as e:
-        result["notes"] = f"Error: {str(e)[:200]}"
-        print(f"[APPLIER] Error for '{job_title}': {e}")
+    # Ensure expected structure
+    if "field_mappings" not in result:
+        result["field_mappings"] = []
+    if "unmapped_fields" not in result:
+        result["unmapped_fields"] = []
+    if "summary" not in result:
+        mapped_count = len(result["field_mappings"])
+        total = mapped_count + len(result["unmapped_fields"])
+        result["summary"] = f"Mapped {mapped_count} of {total} fields"
 
     return result
 
 
-def _run_browser_jobs(job_infos: list[dict], user_data: dict) -> list[dict]:
+# ─── Get Autofill Data ──────────────────────────────────────────────────────
+
+async def get_autofill_data(user_id: str, job_id: Optional[str] = None) -> dict:
     """
-    Run all browser jobs synchronously (called from a thread).
-    Each job_info has: url, title, app_id, pdf_path
-    Returns a list of result dicts.
+    Retrieve the user's resume data formatted for form filling.
+    If a job_id is provided and a tailored resume exists, use that instead.
+
+    Returns a dict with all the fields the extension might need:
+        name, email, phone, location, linkedin, github, skills, summary,
+        experience, education, etc.
     """
-    results = []
-
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-            )
-            context = browser.new_context(
-                viewport={"width": 1280, "height": 800},
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-            )
-
-            for info in job_infos:
-                user_data["resume_pdf_path"] = info.get("pdf_path", "")
-                page = context.new_page()
-                try:
-                    res = _apply_to_single_job(
-                        page,
-                        job_url=info["url"],
-                        job_title=info["title"],
-                        app_id=info["app_id"],
-                        user_data=user_data,
-                    )
-                    results.append({"app_id": info["app_id"], **res})
-                except Exception as e:
-                    print(f"[APPLIER] Error on '{info['title']}': {e}")
-                    results.append({
-                        "app_id": info["app_id"],
-                        "status": "failed_to_apply",
-                        "screenshots": [],
-                        "notes": f"Error: {str(e)[:200]}",
-                    })
-                finally:
-                    page.close()
-
-            browser.close()
-
-    except Exception as e:
-        err_msg = str(e)
-        if "Executable doesn't exist" in err_msg or "browserType.launch" in err_msg:
-            err_msg = "Chromium not installed. Run: python -m playwright install chromium"
-        print(f"[APPLIER] Browser error: {err_msg}")
-        # Return error for all remaining jobs
-        for info in job_infos:
-            if not any(r["app_id"] == info["app_id"] for r in results):
-                results.append({
-                    "app_id": info["app_id"],
-                    "status": "failed_to_apply",
-                    "screenshots": [],
-                    "notes": f"Browser error: {err_msg}",
-                })
-
-    return results
-
-
-# ─── Main entry point ────────────────────────────────────────────────────────
-
-async def run_applier(user_id: str, max_applications: int = 5) -> dict:
-    """
-    Main applier entry point.
-
-    1. Finds applications with status "resume_ready"
-    2. Collects job URLs and user data from DB (async)
-    3. Runs Playwright SYNC in a background thread
-    4. Updates application records with results (async)
-    """
-    stats = {"processed": 0, "applied": 0, "failed": 0, "errors": 0, "skipped": 0}
-
     async with async_session_factory() as db:
-        # Log agent run
-        run = AgentRun(
-            user_id=user_id, agent_type="applier", status="running",
-            config={"max_applications": max_applications},
-        )
-        db.add(run)
-        await db.flush()
+        # Get user
+        user_res = await db.execute(select(User).where(User.id == user_id))
+        user = user_res.scalar_one_or_none()
+        if not user:
+            return {"error": "User not found"}
 
-        try:
-            # 1. Find "resume_ready" applications
-            result = await db.execute(
-                select(Application).where(
-                    Application.user_id == user_id,
-                    Application.status == "resume_ready",
-                ).limit(max_applications)
+        # Try tailored resume first (if job_id provided)
+        resume_data = None
+        if job_id:
+            tr_res = await db.execute(
+                select(TailoredResume).where(
+                    TailoredResume.user_id == user_id,
+                    TailoredResume.job_posting_id == job_id,
+                ).order_by(TailoredResume.created_at.desc()).limit(1)
             )
-            apps = result.scalars().all()
+            tailored = tr_res.scalar_one_or_none()
+            if tailored:
+                resume_data = tailored.resume_json
 
-            if not apps:
-                run.status = "completed"
-                run.result = {"message": "No applications with resume_ready status", **stats}
-                await db.commit()
-                return stats
-
-            # 2. Get user info
-            user_res = await db.execute(select(User).where(User.id == user_id))
-            user = user_res.scalar_one_or_none()
-            if not user:
-                run.status = "failed"
-                run.result = {"error": "User not found"}
-                await db.commit()
-                return {"error": "User not found", **stats}
-
-            resume_res = await db.execute(
+        # Fallback to master resume
+        if not resume_data:
+            mr_res = await db.execute(
                 select(MasterResume).where(
                     MasterResume.user_id == user_id,
                     MasterResume.is_active == True,
                 )
             )
-            master_resume = resume_res.scalar_one_or_none()
-            resume_data = master_resume.resume_data if master_resume else {}
+            master = mr_res.scalar_one_or_none()
+            if master:
+                resume_data = master.resume_data
 
-            user_data = {
-                "name": resume_data.get("name", user.name),
-                "email": user.email,
-                "phone": resume_data.get("phone", ""),
-                "resume_pdf_path": "",
-            }
+        if not resume_data:
+            return {"error": "No resume found. Please upload a resume first."}
 
-            # 3. Collect job info for the browser thread
-            app_map = {}  # app_id -> Application ORM object
-            job_infos = []
+        # Build a flat autofill-friendly dict
+        name = resume_data.get("name", user.name or "")
+        name_parts = name.split(" ", 1)
 
-            for app in apps:
-                job_res = await db.execute(
-                    select(JobPosting).where(JobPosting.id == app.job_posting_id)
-                )
-                job = job_res.scalar_one_or_none()
-                if not job:
-                    stats["skipped"] += 1
-                    continue
+        return {
+            "full_name": name,
+            "first_name": name_parts[0] if name_parts else "",
+            "last_name": name_parts[1] if len(name_parts) > 1 else "",
+            "email": resume_data.get("email", user.email or ""),
+            "phone": resume_data.get("phone", ""),
+            "location": resume_data.get("location", ""),
+            "title": resume_data.get("title", ""),
+            "summary": resume_data.get("summary", ""),
+            "linkedin": resume_data.get("linkedin", ""),
+            "github": resume_data.get("github", ""),
+            "portfolio": resume_data.get("portfolio", ""),
+            "skills": resume_data.get("skills", []),
+            "experience": resume_data.get("experience", []),
+            "education": resume_data.get("education", []),
+            "projects": resume_data.get("projects", []),
+            "certifications": resume_data.get("certifications", []),
+            "languages": resume_data.get("languages", []),
+            # Convenient pre-formatted strings
+            "skills_csv": ", ".join(resume_data.get("skills", [])),
+            "latest_company": (
+                resume_data.get("experience", [{}])[0].get("company", "")
+                if resume_data.get("experience") else ""
+            ),
+            "latest_role": (
+                resume_data.get("experience", [{}])[0].get("role", "")
+                if resume_data.get("experience") else ""
+            ),
+            "highest_degree": (
+                resume_data.get("education", [{}])[0].get("degree", "")
+                if resume_data.get("education") else ""
+            ),
+            "university": (
+                resume_data.get("education", [{}])[0].get("institution", "")
+                if resume_data.get("education") else ""
+            ),
+        }
 
-                pdf_path = ""
-                if app.tailored_resume_id:
-                    tr_res = await db.execute(
-                        select(TailoredResume).where(TailoredResume.id == app.tailored_resume_id)
-                    )
-                    tailored = tr_res.scalar_one_or_none()
-                    if tailored and tailored.resume_pdf_path:
-                        pdf_path = tailored.resume_pdf_path
 
-                app_map[app.id] = app
-                job_infos.append({
-                    "app_id": app.id[:8],
-                    "full_app_id": app.id,
-                    "url": job.url,
-                    "title": job.title,
-                    "pdf_path": pdf_path,
-                })
+# ─── Log Application Result ────────────────────────────────────────────────
 
-            if not job_infos:
-                run.status = "completed"
-                run.result = {"message": "No valid jobs found for applications", **stats}
-                await db.commit()
-                return stats
-
-            # 4. Run Playwright in a background thread (sync API)
-            print(f"[APPLIER] Launching browser for {len(job_infos)} job(s)...")
-            loop = asyncio.get_event_loop()
-            browser_results = await loop.run_in_executor(
-                _executor,
-                _run_browser_jobs,
-                job_infos,
-                user_data,
+async def log_application_from_extension(
+    user_id: str,
+    job_url: str,
+    job_title: str,
+    company: str,
+    status: str = "applied",
+    fields_filled: list[str] | None = None,
+    notes: str = "",
+) -> dict:
+    """
+    Called by the Chrome Extension after it fills out a form.
+    Creates or updates an Application record so the dashboard stays in sync.
+    """
+    async with async_session_factory() as db:
+        # Find the matching job posting (by URL)
+        job_res = await db.execute(
+            select(JobPosting).where(
+                JobPosting.user_id == user_id,
+                JobPosting.url == job_url,
             )
+        )
+        job = job_res.scalar_one_or_none()
 
-            # 5. Update application records with results
-            for br in browser_results:
-                stats["processed"] += 1
-                # Find the matching app
-                full_id = None
-                for info in job_infos:
-                    if info["app_id"] == br["app_id"]:
-                        full_id = info["full_app_id"]
-                        break
-                if not full_id or full_id not in app_map:
-                    stats["errors"] += 1
-                    continue
+        # If the job doesn't exist in our DB, create a minimal record
+        if not job:
+            job = JobPosting(
+                user_id=user_id,
+                title=job_title or "Unknown Position",
+                company=company or "Unknown Company",
+                url=job_url,
+                source="chrome_extension",
+                status="applied",
+            )
+            db.add(job)
+            await db.flush()
 
-                app = app_map[full_id]
-                now = datetime.now(timezone.utc)
-                app.status = br["status"]
-                app.screenshots = (app.screenshots or []) + br.get("screenshots", [])
-                app.notes = br.get("notes", "")
-                app.status_history = (app.status_history or []) + [
+        # Check if application already exists
+        app_res = await db.execute(
+            select(Application).where(
+                Application.user_id == user_id,
+                Application.job_posting_id == job.id,
+            )
+        )
+        app = app_res.scalar_one_or_none()
+
+        now = datetime.now(timezone.utc)
+
+        if app:
+            # Update existing application
+            app.status = status
+            app.notes = notes or f"Applied via Chrome Extension. Fields: {', '.join(fields_filled or [])}"
+            app.status_history = (app.status_history or []) + [
+                {
+                    "status": status,
+                    "at": now.isoformat(),
+                    "note": f"Extension: {notes}" if notes else "Applied via Chrome Extension",
+                    "source": "chrome_extension",
+                }
+            ]
+            if status == "applied":
+                app.applied_at = now
+            app.platform = "chrome_extension"
+            app.updated_at = now
+        else:
+            # Create new application
+            app = Application(
+                user_id=user_id,
+                job_posting_id=job.id,
+                status=status,
+                platform="chrome_extension",
+                notes=notes or f"Applied via Chrome Extension. Fields: {', '.join(fields_filled or [])}",
+                status_history=[
                     {
-                        "status": br["status"],
+                        "status": status,
                         "at": now.isoformat(),
-                        "note": br.get("notes", ""),
+                        "note": "Applied via Chrome Extension",
+                        "source": "chrome_extension",
                     }
-                ]
-                if br["status"] == "applied":
-                    app.applied_at = now
-                    stats["applied"] += 1
-                else:
-                    stats["failed"] += 1
-                app.updated_at = now
+                ],
+                applied_at=now if status == "applied" else None,
+            )
+            db.add(app)
 
-            run.status = "completed"
-            run.result = stats
-            await db.commit()
-            print(f"[APPLIER] Done! {stats}")
+        # Log agent run
+        run = AgentRun(
+            user_id=user_id,
+            agent_type="applier",
+            status="completed",
+            config={"source": "chrome_extension", "job_url": job_url},
+            result={
+                "job_title": job_title,
+                "company": company,
+                "status": status,
+                "fields_filled": fields_filled or [],
+            },
+        )
+        db.add(run)
 
-        except Exception as e:
-            print(f"[APPLIER] Fatal error: {e}")
-            import traceback
-            traceback.print_exc()
-            run.status = "failed"
-            run.result = {"error": str(e)}
-            await db.commit()
-            return {"error": str(e), **stats}
+        await db.commit()
 
-    return stats
+        return {
+            "application_id": app.id,
+            "job_id": job.id,
+            "status": status,
+            "message": f"Application logged: {job_title} at {company}",
+        }
