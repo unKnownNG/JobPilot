@@ -98,6 +98,38 @@ def strip_html(html: str) -> str:
     return text[:1500]
 
 
+def normalize_url(url: str) -> str:
+    """
+    Strip common tracking/session query params so that the same job
+    posted from two different sources compares as equal.
+    e.g. linkedin.com/jobs/view/123?trk=abc  ==  linkedin.com/jobs/view/123
+    """
+    from urllib.parse import urlparse, urlencode, parse_qsl
+    try:
+        parsed = urlparse(url)
+        # Keep only the path; drop all query params and fragments
+        # (most job boards embed the canonical job ID in the path)
+        clean = parsed._replace(query="", fragment="")
+        return clean.geturl().rstrip("/").lower()
+    except Exception:
+        return url.lower().strip()
+
+
+def job_fingerprint(title: str, company: str) -> str:
+    """
+    A normalised (title, company) key for catching cross-source duplicates
+    where the URL differs but it's the same listing.
+    e.g.  "Software Engineer" @ "Google India Pvt Ltd"  ==
+          "software engineer"  @ "google india pvt ltd"
+    """
+    def clean(s: str) -> str:
+        # lower-case, keep only alphanumeric chars, collapse spaces
+        s = s.lower()
+        s = re.sub(r"[^a-z0-9 ]", " ", s)
+        return re.sub(r"\s+", " ", s).strip()
+    return f"{clean(title)}|{clean(company)}"
+
+
 def resolve_location(user_location: str) -> str:
     """
     Always return a usable India location.
@@ -132,34 +164,82 @@ def location_bonus(job_location: str, user_location: str) -> int:
     return 0
 
 
+# Words that describe a person's status, not a job role.
+# These should never appear alone in a job-board search query.
+_NOISE_WORDS = {
+    "student", "graduate", "intern", "internship", "fresher", "entry level",
+    "junior", "trainee", "apprentice", "undergraduate", "postgraduate",
+    "candidate", "applicant", "seeker", "enthusiast", "learner",
+}
+
+
+def _clean_title_for_search(title: str) -> str:
+    """
+    Strip resume-specific noise from a job title before using it as
+    a search query. E.g.:
+      "Software Engineering Student"  →  "Software Engineer"
+      "Junior Python Developer"        →  "Python Developer"
+    """
+    words = title.split()
+    cleaned = [w for w in words if w.lower() not in _NOISE_WORDS]
+    result = " ".join(cleaned).strip()
+    # Normalise trailing plurals that job boards don't search well
+    result = re.sub(r"(?i)\bEngineering\b", "Engineer", result)
+    result = re.sub(r"(?i)\bProgramming\b", "Programmer", result)
+    return result or title   # fall back to original if everything was noise
+
+
 def build_search_queries(resume_data: dict) -> list[str]:
-    """Generate multiple targeted search queries from the resume."""
-    title = resume_data.get("title", "")
+    """
+    Generate multiple targeted, job-board-friendly search queries from
+    the user's resume.
+
+    Rules:
+    - The resume title is cleaned of noise words before use
+    - Individual skills produce  "<skill> developer"  queries
+    - Combined title+skill queries are added for short/single-word titles
+    - Maximum 5 unique queries returned
+    """
+    raw_title = resume_data.get("title", "")
+    clean_title = _clean_title_for_search(raw_title) if raw_title else ""
+
     skills = resume_data.get("skills", [])
     if isinstance(skills, str):
         skills = [s.strip() for s in skills.split(",")]
+    tech_skills = [s for s in skills if len(s) > 1][:8]
 
-    queries = []
-    if title and len(title.split()) >= 2:
-        queries.append(title)
+    queries: list[str] = []
 
-    tech_skills = [s for s in skills if len(s) > 1][:6]
+    # 1. Cleaned title (only if it has ≥1 word and doesn't look like pure noise)
+    if clean_title and clean_title.lower() not in _NOISE_WORDS:
+        queries.append(clean_title)
+
+    # 2. Skill-specific queries  (top 3 skills → "<skill> developer")
     for skill in tech_skills[:3]:
-        queries.append(f"{skill} developer")
+        q = f"{skill} developer"
+        if q.lower() != clean_title.lower():
+            queries.append(q)
 
-    if title and len(title.split()) == 1:
+    # 3. If title is a single word (e.g. "Engineer"), pair it with skills
+    title_words = clean_title.split()
+    if len(title_words) == 1 and clean_title:
         for skill in tech_skills[:2]:
-            queries.append(f"{skill} {title}")
+            queries.append(f"{skill} {clean_title}")
 
-    seen = set()
-    unique = []
+    # 4. Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
     for q in queries:
-        ql = q.lower()
-        if ql not in seen:
+        ql = q.lower().strip()
+        if ql and ql not in seen:
             seen.add(ql)
             unique.append(q)
 
-    return unique[:4]
+    # 5. Safety fallback
+    if not unique:
+        unique = ["software engineer"]
+
+    return unique[:5]
 
 
 # ─── Source 1: JobSpy (LinkedIn + Indeed India + Naukri + Glassdoor) ─────────
@@ -167,8 +247,8 @@ def build_search_queries(resume_data: dict) -> list[str]:
 def _scrape_jobspy(
     search_term: str,
     location: str = "India",
-    results_wanted: int = 20,
-    hours_old: int = 72,
+    results_wanted: int = 25,
+    hours_old: int = 168,   # 7 days — 72 h was too narrow, many good jobs missed
 ) -> list[dict]:
     """
     Synchronous JobSpy scraper — runs in thread pool.
@@ -188,9 +268,9 @@ def _scrape_jobspy(
             results_wanted=results_wanted,
             hours_old=hours_old,
             is_remote=False,
-            country_indeed="india",          # ← CRITICAL FIX (was "usa")
+            country_indeed="india",
             description_format="markdown",
-            linkedin_fetch_description=False, # Set True for richer data (slower)
+            linkedin_fetch_description=True,  # Fetch full descriptions for better skill matching
             verbose=0,
         )
 
@@ -559,8 +639,8 @@ def extract_skills_list(data: dict) -> list[str]:
 async def run_scout(
     user_id: str,
     categories: Optional[list[str]] = None,
-    min_score: float = 60.0,
-    max_jobs: int = 25,
+    min_score: float = 45.0,   # Lowered from 60 — surface more results for user review
+    max_jobs: int = 50,        # Raised from 25 — fetch a wider pool
     search_term: str = "",
 ) -> dict:
     """
@@ -625,11 +705,15 @@ async def run_scout(
             stats["queries_used"] = queries
             print(f"[SCOUT] Queries: {queries} | Skills: {user_skills[:8]}")
 
-            # 4. Load known URLs (dedup against existing DB)
+            # 4. Load known URLs AND (title, company) fingerprints from DB
+            #    so we block duplicates both within a run and across runs.
             existing = await db.execute(
-                select(JobPosting.url).where(JobPosting.user_id == user_id)
+                select(JobPosting.url, JobPosting.title, JobPosting.company)
+                .where(JobPosting.user_id == user_id)
             )
-            known_urls = {r[0] for r in existing.all()}
+            existing_rows = existing.all()
+            known_urls         = {normalize_url(r[0]) for r in existing_rows}
+            known_fingerprints = {job_fingerprint(r[1], r[2]) for r in existing_rows}
 
             # 5. Scrape ALL sources concurrently
             per_query  = max(max_jobs // len(queries), 15)
@@ -676,34 +760,72 @@ async def run_scout(
             stats["blocked_title"] = stats["fetched"] - len(tech_jobs)
             print(f"[SCOUT] After title filter: {len(tech_jobs)} ({stats['blocked_title']} blocked)")
 
-            # 7. Filter Layer 2: Skills overlap (≥1 skill must appear in description)
+            # 7. Filter Layer 2: Skills overlap
+            #
+            # Strategy:
+            #   - Match skills against BOTH description and job title
+            #   - Jobs with empty descriptions get overlap=0 but still PASS
+            #     (their description just hasn't been fetched yet; we let the
+            #     LLM decide rather than silently dropping them)
+            #   - Jobs with a description that mentions ≥1 skill pass normally
+            #   - Jobs with a description that mentions NO skills are kept if
+            #     there are fewer than 30 candidates total (don't be too picky
+            #     when the pool is small)
             if user_skills:
                 skilled_jobs = []
                 for j in tech_jobs:
-                    # Also check skills field from Naukri (if present)
-                    combined_text = j["description"] + " " + " ".join(j.get("skills", []))
+                    # Check title + description + naukri skills field
+                    combined_text = (
+                        j.get("title", "") + " "
+                        + j["description"] + " "
+                        + " ".join(j.get("skills", []))
+                    )
+                    has_description = len(j["description"].strip()) > 50
                     overlap = skills_overlap_score(combined_text, user_skills)
+
                     if overlap >= 1:
                         j["_skill_overlap"] = overlap
                         skilled_jobs.append(j)
+                    elif not has_description:
+                        # No description fetched yet — give it the benefit of the doubt
+                        j["_skill_overlap"] = 0
+                        skilled_jobs.append(j)
                     else:
                         stats["blocked_skills"] += 1
-                # Sort by skill overlap — most relevant first
+
+                # Sort by skill overlap (highest first), empty-desc jobs go last
                 skilled_jobs.sort(key=lambda x: x.get("_skill_overlap", 0), reverse=True)
                 print(f"[SCOUT] After skills filter: {len(skilled_jobs)} ({stats['blocked_skills']} blocked)")
             else:
                 skilled_jobs = tech_jobs
 
-            # 8. Deduplicate
-            seen_urls: set[str] = set()
+            # 8. Deduplicate — two layers:
+            #    a) Normalised URL  (catches same job, same source, tracking params stripped)
+            #    b) (title, company) fingerprint  (catches same job from different sources)
+            seen_urls:         set[str] = set()
+            seen_fingerprints: set[str] = set()
             new_jobs: list[dict] = []
+            dupes = 0
             for j in skilled_jobs:
-                url = j.get("url", "")
-                if url and url not in known_urls and url not in seen_urls:
-                    seen_urls.add(url)
-                    new_jobs.append(j)
-            stats["new"] = len(new_jobs)
-            print(f"[SCOUT] {stats['new']} unique new jobs to score")
+                url = normalize_url(j.get("url", ""))
+                fp  = job_fingerprint(j.get("title", ""), j.get("company", ""))
+
+                if not url:
+                    continue
+                if url in known_urls or url in seen_urls:
+                    dupes += 1
+                    continue
+                if fp in known_fingerprints or fp in seen_fingerprints:
+                    dupes += 1
+                    continue
+
+                seen_urls.add(url)
+                seen_fingerprints.add(fp)
+                new_jobs.append(j)
+
+            stats["new"]    = len(new_jobs)
+            stats["dupes"]  = dupes
+            print(f"[SCOUT] {stats['new']} unique new jobs to score ({dupes} duplicates removed)")
 
             if not new_jobs:
                 run.status = "completed"
@@ -762,7 +884,8 @@ async def run_scout(
                             },
                             status="discovered",
                         ))
-                        known_urls.add(raw["url"])
+                        known_urls.add(normalize_url(raw["url"]))
+                        known_fingerprints.add(job_fingerprint(raw["title"], raw["company"]))
                         stats["saved"] += 1
 
             run.status = "completed"

@@ -212,17 +212,17 @@ export default function ResumeView() {
           {/* Header info */}
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-xl font-bold text-fg">{rd.name as string}</h2>
-              <p className="text-sm text-accent font-medium mt-0.5">{rd.title as string}</p>
+              <h2 className="text-xl font-bold text-fg">{String(rd.name)}</h2>
+              <p className="text-sm text-accent font-medium mt-0.5">{String(rd.title)}</p>
               <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
-                {rd.email && <span className="text-xs text-muted-fg">✉ {rd.email as string}</span>}
-                {rd.phone && <span className="text-xs text-muted-fg">📱 {rd.phone as string}</span>}
-                {rd.location && <span className="text-xs text-muted-fg">📍 {rd.location as string}</span>}
+                {rd.email && <span className="text-xs text-muted-fg">✉ {String(rd.email)}</span>}
+                {rd.phone && <span className="text-xs text-muted-fg">📱 {String(rd.phone)}</span>}
+                {rd.location && <span className="text-xs text-muted-fg">📍 {String(rd.location)}</span>}
               </div>
               <div className="flex flex-wrap gap-x-4 mt-1">
-                {rd.linkedin && <a href={rd.linkedin as string} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">LinkedIn</a>}
-                {rd.github && <a href={rd.github as string} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">GitHub</a>}
-                {rd.portfolio && <a href={rd.portfolio as string} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">Portfolio</a>}
+                {rd.linkedin && <a href={String(rd.linkedin)} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">LinkedIn</a>}
+                {rd.github && <a href={String(rd.github)} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">GitHub</a>}
+                {rd.portfolio && <a href={String(rd.portfolio)} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">Portfolio</a>}
               </div>
             </div>
             <div className="text-right shrink-0">
@@ -236,7 +236,7 @@ export default function ResumeView() {
           {rd.summary && (
             <div>
               <h4 className="text-xs font-semibold text-muted-fg uppercase tracking-wider mb-2">Summary</h4>
-              <p className="text-sm text-muted-fg leading-relaxed">{rd.summary as string}</p>
+              <p className="text-sm text-muted-fg leading-relaxed">{String(rd.summary)}</p>
             </div>
           )}
 
@@ -256,8 +256,8 @@ export default function ResumeView() {
               <h4 className="text-xs font-semibold text-muted-fg uppercase tracking-wider mb-3">Experience</h4>
               {(rd.experience as Record<string, unknown>[]).map((exp, i) => (
                 <div key={i} className="mb-5 pl-4 border-l-2 border-primary/30">
-                  <p className="text-sm font-semibold text-fg">{exp.role as string} <span className="font-normal text-muted-fg">at</span> {exp.company as string}</p>
-                  <p className="text-xs text-muted-fg mt-0.5">{exp.start_date as string} – {exp.end_date as string}{exp.location ? ` · ${exp.location}` : ""}</p>
+                  <p className="text-sm font-semibold text-fg">{String(exp.role)} <span className="font-normal text-muted-fg">at</span> {String(exp.company)}</p>
+                  <p className="text-xs text-muted-fg mt-0.5">{String(exp.start_date)} – {String(exp.end_date)}{exp.location ? ` · ${exp.location}` : ""}</p>
                   {Array.isArray(exp.bullets) && (
                     <ul className="text-xs text-muted-fg mt-2 space-y-1 list-disc list-inside">
                       {(exp.bullets as string[]).map((b, j) => <li key={j}>{b}</li>)}
@@ -273,8 +273,8 @@ export default function ResumeView() {
               <h4 className="text-xs font-semibold text-muted-fg uppercase tracking-wider mb-3">Education</h4>
               {(rd.education as Record<string, unknown>[]).map((edu, i) => (
                 <div key={i} className="mb-3 pl-4 border-l-2 border-accent/30">
-                  <p className="text-sm font-medium text-fg">{edu.degree as string}</p>
-                  <p className="text-xs text-muted-fg">{edu.institution as string}{edu.year ? ` · ${edu.year}` : ""}{edu.gpa ? ` · GPA: ${edu.gpa}` : ""}</p>
+                  <p className="text-sm font-medium text-fg">{String(edu.degree)}</p>
+                  <p className="text-xs text-muted-fg">{String(edu.institution)}{edu.year ? ` · ${edu.year}` : ""}{edu.gpa ? ` · GPA: ${edu.gpa}` : ""}</p>
                 </div>
               ))}
             </div>
@@ -286,10 +286,10 @@ export default function ResumeView() {
               {(rd.projects as Record<string, unknown>[]).map((proj, i) => (
                 <div key={i} className="mb-3 pl-4 border-l-2 border-warning/30">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm font-medium text-fg">{proj.name as string}</p>
-                    {proj.url && <a href={proj.url as string} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">↗ Link</a>}
+                    <p className="text-sm font-medium text-fg">{String(proj.name)}</p>
+                    {proj.url && <a href={String(proj.url)} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">↗ Link</a>}
                   </div>
-                  {proj.description && <p className="text-xs text-muted-fg mt-0.5">{proj.description as string}</p>}
+                  {proj.description && <p className="text-xs text-muted-fg mt-0.5">{String(proj.description)}</p>}
                   {Array.isArray(proj.tech_stack) && proj.tech_stack.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5">
                       {(proj.tech_stack as string[]).map(t => (

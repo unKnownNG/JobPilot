@@ -25,9 +25,9 @@ export default function AgentsView({ runs, onRefresh }: Props) {
   const [scoutResult,  setScoutResult]  = useState<Record<string, unknown> | null>(null);
   const [tailorResult, setTailorResult] = useState<Record<string, unknown> | null>(null);
   const [applierResult, setApplierResult] = useState<Record<string, unknown> | null>(null);
-  const [minScore, setMinScore] = useState(60);
+  const [minScore, setMinScore] = useState(45);  // matches new backend default
   const [searchTerm, setSearchTerm] = useState("");
-  const [maxJobs, setMaxJobs] = useState(25);
+  const [maxJobs, setMaxJobs] = useState(50);     // matches new backend default
   const [maxApps, setMaxApps] = useState(5);
 
   const triggerScout = async () => {
@@ -75,6 +75,19 @@ export default function AgentsView({ runs, onRefresh }: Props) {
   const scoutRuns  = runs.filter(r => r.agent_type === "scout");
   const tailorRuns = runs.filter(r => r.agent_type === "tailor");
   const applierRuns = runs.filter(r => r.agent_type === "applier");
+
+  // Safely render a result value — objects/arrays get pretty-printed
+  function renderValue(v: unknown): string {
+    if (v === null || v === undefined) return "—";
+    if (Array.isArray(v)) return v.join(", ") || "(none)";
+    if (typeof v === "object") {
+      // e.g. source_counts: { indeed: 50, linkedin: 41 }
+      return Object.entries(v as Record<string, unknown>)
+        .map(([src, cnt]) => `${src}:${cnt}`)
+        .join(", ");
+    }
+    return String(v);
+  }
 
   return (
     <div className="space-y-6 max-w-[1000px]">
@@ -375,7 +388,9 @@ export default function AgentsView({ runs, onRefresh }: Props) {
                 <div className="text-right">
                   <p className="text-xs text-muted-fg">
                     {r.result && !r.result.error
-                      ? Object.entries(r.result).map(([k,v]) => `${v} ${k}`).join(" · ")
+                      ? Object.entries(r.result)
+                          .map(([k, v]) => `${renderValue(v)} ${k}`)
+                          .join(" · ")
                       : r.result?.error ? "Failed" : "—"}
                   </p>
                   <p className="text-[11px] text-muted-fg/60">
