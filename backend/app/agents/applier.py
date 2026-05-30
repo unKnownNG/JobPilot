@@ -250,95 +250,107 @@ async def log_application_from_extension(
     Creates or updates an Application record so the dashboard stays in sync.
     """
     async with async_session_factory() as db:
-        # Find the matching job posting (by URL)
-        job_res = await db.execute(
-            select(JobPosting).where(
-                JobPosting.user_id == user_id,
-                JobPosting.url == job_url,
-            )
-        )
-        job = job_res.scalar_one_or_none()
-
-        # If the job doesn't exist in our DB, create a minimal record
-        if not job:
-            job = JobPosting(
-                user_id=user_id,
-                title=job_title or "Unknown Position",
-                company=company or "Unknown Company",
-                url=job_url,
-                source="chrome_extension",
-                status="applied",
-            )
-            db.add(job)
-            await db.flush()
-
-        # Check if application already exists
-        app_res = await db.execute(
-            select(Application).where(
-                Application.user_id == user_id,
-                Application.job_posting_id == job.id,
-            )
-        )
-        app = app_res.scalar_one_or_none()
-
         now = datetime.now(timezone.utc)
 
-        if app:
-            # Update existing application
-            app.status = status
-            app.notes = notes or f"Applied via Chrome Extension. Fields: {', '.join(fields_filled or [])}"
-            app.status_history = (app.status_history or []) + [
-                {
-                    "status": status,
-                    "at": now.isoformat(),
-                    "note": f"Extension: {notes}" if notes else "Applied via Chrome Extension",
-                    "source": "chrome_extension",
-                }
-            ]
-            if status == "applied":
-                app.applied_at = now
-            app.platform = "chrome_extension"
-            app.updated_at = now
-        else:
-            # Create new application
-            app = Application(
-                user_id=user_id,
-                job_posting_id=job.id,
-                status=status,
-                platform="chrome_extension",
-                notes=notes or f"Applied via Chrome Extension. Fields: {', '.join(fields_filled or [])}",
-                status_history=[
-                    {
-                        "status": status,
-                        "at": now.isoformat(),
-                        "note": "Applied via Chrome Extension",
-                        "source": "chrome_extension",
-                    }
-                ],
-                applied_at=now if status == "applied" else None,
-            )
-            db.add(app)
-
-        # Log agent run
+        # Log agent run (created early so it's always committed)
         run = AgentRun(
             user_id=user_id,
             agent_type="applier",
-            status="completed",
+            status="running",
             config={"source": "chrome_extension", "job_url": job_url},
-            result={
+        )
+        db.add(run)
+        await db.flush()
+
+        try:
+            # Find the matching job posting (by URL)
+            job_res = await db.execute(
+                select(JobPosting).where(
+                    JobPosting.user_id == user_id,
+                    JobPosting.url == job_url,
+                )
+            )
+            job = job_res.scalar_one_or_none()
+
+            # If the job doesn't exist in our DB, create a minimal record
+            if not job:
+                job = JobPosting(
+                    user_id=user_id,
+                    title=job_title or "Unknown Position",
+                    company=company or "Unknown Company",
+                    url=job_url,
+                    source="chrome_extension",
+                    status="applied",
+                )
+                db.add(job)
+                await db.flush()
+
+            # Check if application already exists
+            app_res = await db.execute(
+                select(Application).where(
+                    Application.user_id == user_id,
+                    Application.job_posting_id == job.id,
+                )
+            )
+            app = app_res.scalar_one_or_none()
+
+            if app:
+                # Update existing application
+                app.status = status
+                app.notes = notes or f"Applied via Chrome Extension. Fields: {', '.join(fields_filled or [])}"
+                app.status_history = (app.status_history or []) + [
+                    {
+                        "status": status,
+                        "at": now.isoformat(),
+                        "note": f"Extension: {notes}" if notes else "Applied via Chrome Extension",
+                        "source": "chrome_extension",
+                    }
+                ]
+                if status == "applied":
+                    app.applied_at = now
+                app.platform = "chrome_extension"
+                app.updated_at = now
+            else:
+                # Create new application
+                app = Application(
+                    user_id=user_id,
+                    job_posting_id=job.id,
+                    status=status,
+                    platform="chrome_extension",
+                    notes=notes or f"Applied via Chrome Extension. Fields: {', '.join(fields_filled or [])}",
+                    status_history=[
+                        {
+                            "status": status,
+                            "at": now.isoformat(),
+                            "note": "Applied via Chrome Extension",
+                            "source": "chrome_extension",
+                        }
+                    ],
+                    applied_at=now if status == "applied" else None,
+                )
+                db.add(app)
+
+            # Mark run as completed
+            run.status = "completed"
+            run.completed_at = datetime.now(timezone.utc)
+            run.result = {
                 "job_title": job_title,
                 "company": company,
                 "status": status,
                 "fields_filled": fields_filled or [],
-            },
-        )
-        db.add(run)
+            }
+            await db.commit()
 
-        await db.commit()
+            return {
+                "application_id": app.id,
+                "job_id": job.id,
+                "status": status,
+                "message": f"Application logged: {job_title} at {company}",
+            }
 
-        return {
-            "application_id": app.id,
-            "job_id": job.id,
-            "status": status,
-            "message": f"Application logged: {job_title} at {company}",
-        }
+        except Exception as e:
+            run.status = "failed"
+            run.completed_at = datetime.now(timezone.utc)
+            run.result = {"error": str(e)}
+            await db.commit()
+            raise

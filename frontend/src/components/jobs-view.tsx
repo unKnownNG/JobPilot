@@ -17,6 +17,12 @@ export default function JobsView({ jobs: jobList, onRefresh }: Props) {
   });
   const [loading, setLoading] = useState(false);
 
+  // Import URL state
+  const [importUrl, setImportUrl] = useState("");
+  const [importLoading, setImportLoading] = useState(false);
+  const [importResult, setImportResult] = useState<JobResponse | null>(null);
+  const [importError, setImportError] = useState("");
+
   const filtered = filter ? jobList.filter((j) => j.status === filter) : jobList;
 
   const handleAdd = async (e: React.FormEvent) => {
@@ -31,6 +37,24 @@ export default function JobsView({ jobs: jobList, onRefresh }: Props) {
     finally { setLoading(false); }
   };
 
+  const handleImportUrl = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!importUrl.trim()) return;
+    setImportLoading(true);
+    setImportResult(null);
+    setImportError("");
+    try {
+      const job = await jobsApi.importUrl(importUrl.trim());
+      setImportResult(job);
+      setImportUrl("");
+      onRefresh();
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : "Failed to import job");
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
   const updateStatus = async (id: string, status: string) => {
     await jobsApi.updateStatus(id, status);
     onRefresh();
@@ -40,6 +64,117 @@ export default function JobsView({ jobs: jobList, onRefresh }: Props) {
 
   return (
     <div className="space-y-5 max-w-[1200px]">
+
+      {/* ── Import from URL ── */}
+      <div className="relative overflow-hidden bg-gradient-to-br from-primary/8 via-card to-accent/5 border border-primary/20 rounded-2xl p-6 shadow-lg shadow-primary/5">
+        {/* Decorative glow */}
+        <div className="absolute -top-20 -right-20 w-48 h-48 bg-primary/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-16 -left-16 w-36 h-36 bg-accent/10 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="relative">
+          <div className="flex items-center gap-2.5 mb-3">
+            <div className="w-9 h-9 rounded-xl bg-primary/15 flex items-center justify-center ring-1 ring-primary/20">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px] text-primary">
+                <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" />
+                <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="font-semibold text-sm text-fg">Import Job from URL</h3>
+              <p className="text-xs text-muted-fg">Paste a job link — AI extracts details, scores it, and auto-approves it for all agents</p>
+            </div>
+          </div>
+
+          <form onSubmit={handleImportUrl} className="flex gap-2.5">
+            <div className="flex-1 relative">
+              <input
+                type="url"
+                placeholder="https://linkedin.com/jobs/view/... or any job board link"
+                value={importUrl}
+                onChange={(e) => setImportUrl(e.target.value)}
+                required
+                disabled={importLoading}
+                className="w-full px-4 py-3 rounded-xl bg-bg/80 backdrop-blur-sm border border-border text-sm text-fg placeholder:text-muted-fg/40 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all disabled:opacity-50"
+              />
+              {importLoading && (
+                <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                  <div className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                </div>
+              )}
+            </div>
+            <button
+              type="submit"
+              disabled={importLoading || !importUrl.trim()}
+              className="px-6 py-3 rounded-xl bg-gradient-to-r from-primary to-[#6c5ce7] text-white text-sm font-semibold disabled:opacity-40 hover:shadow-lg hover:shadow-primary/25 hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer shrink-0"
+            >
+              {importLoading ? (
+                <span className="flex items-center gap-2">
+                  <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                  </svg>
+                  Importing…
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4">
+                    <path d="M12 5v14M5 12h14" />
+                  </svg>
+                  Import &amp; Process
+                </span>
+              )}
+            </button>
+          </form>
+
+          {/* Import success */}
+          {importResult && (
+            <div className="mt-3 bg-success/8 border border-success/20 rounded-xl p-4 animate-fade-in">
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-lg bg-success/15 flex items-center justify-center shrink-0 mt-0.5">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4 text-success">
+                    <path d="M20 6L9 17l-5-5" />
+                  </svg>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-fg">{importResult.title}</p>
+                  <p className="text-xs text-muted-fg mt-0.5">
+                    {importResult.company}
+                    {importResult.location ? ` · ${importResult.location}` : ""}
+                    {importResult.work_type ? ` · ${importResult.work_type}` : ""}
+                  </p>
+                  <div className="flex items-center gap-3 mt-2">
+                    {importResult.relevance_score !== null && (
+                      <span className="text-xs font-medium bg-primary/10 text-primary px-2.5 py-1 rounded-full">
+                        {Math.round(importResult.relevance_score)}% match
+                      </span>
+                    )}
+                    <span className="text-xs font-medium bg-success/10 text-success px-2.5 py-1 rounded-full capitalize">
+                      {importResult.status}
+                    </span>
+                    <span className="text-xs text-muted-fg">Ready for Tailor &amp; Applier agents</span>
+                  </div>
+                </div>
+                <button onClick={() => setImportResult(null)} className="text-muted-fg hover:text-fg transition cursor-pointer">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Import error */}
+          {importError && (
+            <div className="mt-3 bg-danger/8 border border-danger/20 rounded-xl p-3 flex items-center gap-2.5 animate-fade-in">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 text-danger shrink-0">
+                <circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" />
+              </svg>
+              <p className="text-xs text-danger flex-1">{importError}</p>
+              <button onClick={() => setImportError("")} className="text-danger/60 hover:text-danger transition cursor-pointer">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5"><path d="M18 6L6 18M6 6l12 12" /></svg>
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex gap-2 flex-wrap">
@@ -100,7 +235,7 @@ export default function JobsView({ jobs: jobList, onRefresh }: Props) {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-10 h-10 mx-auto mb-3 text-muted-fg/40">
             <path d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
           </svg>
-          <p className="text-sm text-muted-fg">No jobs found. Add one to get started!</p>
+          <p className="text-sm text-muted-fg">No jobs found. Import a URL or add one to get started!</p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -111,6 +246,9 @@ export default function JobsView({ jobs: jobList, onRefresh }: Props) {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2.5 mb-1">
                   <h3 className="font-medium text-sm truncate text-fg">{job.title}</h3>
+                  {job.source === "user_link" && (
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/15">imported</span>
+                  )}
                   <span className={`text-[11px] font-medium px-2.5 py-0.5 rounded-full capitalize ${
                     job.status === "approved" ? "bg-success/15 text-success"
                     : job.status === "rejected" ? "bg-danger/15 text-danger"

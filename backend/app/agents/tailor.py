@@ -16,6 +16,8 @@ from typing import Optional
 
 from sqlalchemy import select
 
+import app.models  # noqa: F401 — register all models so relationships resolve
+
 from app.core.database import async_session_factory
 from app.core.llm import llm_provider
 from app.models.job_posting import JobPosting
@@ -59,7 +61,7 @@ Return ONLY the complete modified resume as valid JSON with the same structure."
     )
 
     # If parsing failed, return the master as fallback
-    if "error" in result and "raw" in result:
+    if isinstance(result, dict) and "error" in result:
         return master_data
 
     return result
@@ -199,7 +201,7 @@ async def run_tailor(user_id: str) -> dict:
                     if app:
                         app.tailored_resume_id = tailored.id
                         app.status = "resume_ready"
-                        app.status_history = app.status_history + [
+                        app.status_history = (app.status_history or []) + [
                             {"status": "resume_ready", "at": now.isoformat(), "note": "Resume tailored by AI"}
                         ]
                         app.updated_at = now
@@ -224,11 +226,13 @@ async def run_tailor(user_id: str) -> dict:
                     continue
 
             run.status = "completed"
+            run.completed_at = datetime.now(timezone.utc)
             run.result = stats
             await db.commit()
 
         except Exception as e:
             run.status = "failed"
+            run.completed_at = datetime.now(timezone.utc)
             run.result = {"error": str(e)}
             await db.commit()
             raise

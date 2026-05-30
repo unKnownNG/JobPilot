@@ -115,6 +115,11 @@ export const jobs = {
       method: "PUT",
       body: JSON.stringify({ status }),
     }),
+  importUrl: (url: string, auto_approve = true) =>
+    request<JobResponse>("/jobs/import-url", {
+      method: "POST",
+      body: JSON.stringify({ url, auto_approve }),
+    }),
   stats: () => request<{ total: number; by_status: Record<string, number> }>("/jobs/stats/summary"),
 };
 

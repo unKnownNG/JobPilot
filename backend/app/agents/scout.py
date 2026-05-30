@@ -1,29 +1,32 @@
 # =============================================================================
-# agents/scout.py — Scout Agent v6 (India-First Multi-Source)
+# agents/scout.py — Scout Agent v7 (India-First Multi-Source)
 # =============================================================================
 # Sources (run concurrently):
-#   1. JobSpy      — LinkedIn + Indeed India + Naukri + Glassdoor
-#   2. Naukri API  — Hits Naukri's internal JSON endpoint directly (no key)
+#   1. JobSpy      — LinkedIn + Indeed India (reliable pair)
+#   2. Naukri API  — Direct scraper with cookie-first recaptcha bypass
 #   3. Adzuna API  — Official REST API, India coverage, salary data (free key)
-#   4. Remotive    — Remote-only jobs, no key needed (kept as bonus)
+#   4. Remotive    — Remote-only jobs, no key needed
+#   5. Himalayas   — Curated tech jobs API, no key needed
 #
-# Key fixes over v5:
-#   - country_indeed="india" (was "usa" — root cause of US results)
-#   - Naukri added to JobSpy site_name list
-#   - Custom Naukri scraper for richer/more reliable India data
-#   - Adzuna India source added
-#   - All sources run concurrently via asyncio.gather
-#   - Location defaults to "India" when resume location is missing
+# v7 fixes:
+#   - Dropped Glassdoor (400 location parse errors) and Naukri from JobSpy
+#     (406 recaptcha). Only LinkedIn + Indeed remain in JobSpy.
+#   - Naukri direct API rewritten with modern headers + cookie pre-fetch
+#   - Added Himalayas.app as a new free, reliable source
+#   - Batch scoring is more resilient to wrapped LLM responses
 # =============================================================================
 
 import re
 import asyncio
 import httpx
+from datetime import datetime, timezone
 from typing import Optional
 from html import unescape
 from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy import select
+
+import app.models  # noqa: F401 — register all models so relationships resolve
 
 from app.core.database import async_session_factory
 from app.core.llm import llm_provider
@@ -253,16 +256,15 @@ def _scrape_jobspy(
     """
     Synchronous JobSpy scraper — runs in thread pool.
 
-    KEY FIXES:
-    - country_indeed="india" → hits indeed.co.in instead of indeed.com
-    - "naukri" added to site_name
-    - location defaults to "India"
+    Only uses LinkedIn + Indeed India. Glassdoor was dropped (400 location
+    parse errors) and Naukri via JobSpy was dropped (406 recaptcha).
+    We have our own direct Naukri scraper below.
     """
     from jobspy import scrape_jobs
 
     try:
         df = scrape_jobs(
-            site_name=["indeed", "linkedin", "naukri", "glassdoor"],
+            site_name=["indeed", "linkedin"],
             search_term=search_term,
             location=location,
             results_wanted=results_wanted,
@@ -270,7 +272,7 @@ def _scrape_jobspy(
             is_remote=False,
             country_indeed="india",
             description_format="markdown",
-            linkedin_fetch_description=True,  # Fetch full descriptions for better skill matching
+            linkedin_fetch_description=True,
             verbose=0,
         )
 
@@ -333,33 +335,55 @@ async def fetch_jobspy(search_term: str, location: str = "India", results_wanted
     )
 
 
-# ─── Source 2: Naukri Internal API (no key needed) ───────────────────────────
+# ─── Source 2: Naukri (cookie-first, recaptcha bypass) ───────────────────────
 
 async def fetch_naukri(
     keyword: str,
     location: str = "India",
     experience: int = 0,
-    results: int = 20,
+    results: int = 25,
 ) -> list[dict]:
     """
-    Hits Naukri's internal search JSON endpoint — the same one their
-    website frontend calls. No API key required.
+    Naukri scraper with cookie-first approach:
+      1. GET the Naukri search HTML page first to obtain cookies/tokens
+      2. Use those cookies when calling the JSON API endpoint
 
-    Falls back gracefully if Naukri updates their endpoint.
+    This bypasses the 406 recaptcha that hits cold API requests.
+    Falls back gracefully if Naukri changes their API.
     """
-    # Normalize location for Naukri (strip ", India" suffix if present)
     naukri_loc = location.replace(", India", "").replace(",India", "").strip()
     if naukri_loc.lower() == "india":
-        naukri_loc = ""  # Empty = all India
+        naukri_loc = ""
 
-    headers = {
-        "User-Agent":   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept":       "application/json, text/plain, */*",
-        "Referer":      "https://www.naukri.com/",
+    seo_key = keyword.lower().replace(" ", "-")
+    if naukri_loc:
+        search_url = f"https://www.naukri.com/{seo_key}-jobs-in-{naukri_loc.lower().replace(' ', '-')}"
+    else:
+        search_url = f"https://www.naukri.com/{seo_key}-jobs"
+
+    # Modern Chrome-like headers — critical for avoiding bot detection
+    browser_headers = {
+        "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language":  "en-US,en;q=0.9",
+        "Accept-Encoding":  "gzip, deflate, br",
+        "Connection":       "keep-alive",
+        "Sec-Fetch-Dest":   "document",
+        "Sec-Fetch-Mode":   "navigate",
+        "Sec-Fetch-Site":   "none",
+        "Sec-Fetch-User":   "?1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+
+    api_headers = {
+        "User-Agent":   browser_headers["User-Agent"],
+        "Accept":       "application/json",
+        "Referer":      search_url,
         "appid":        "109",
         "systemid":     "Naukri",
         "gid":          "LOCATION,INDUSTRY,EDUCATION,FAREA_ROLE",
+        "Content-Type": "application/json",
     }
 
     params = {
@@ -368,23 +392,30 @@ async def fetch_naukri(
         "searchType":   "adv",
         "keyword":      keyword,
         "k":            keyword,
-        "seoKey":       keyword.lower().replace(" ", "-") + "-jobs",
+        "seoKey":       f"{seo_key}-jobs",
         "src":          "jobsearchDesk",
         "latLong":      "",
     }
-
     if naukri_loc:
         params["location"] = naukri_loc
         params["l"] = naukri_loc
-
     if experience > 0:
         params["experience"] = experience
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(
+            timeout=30.0,
+            follow_redirects=True,
+            http2=False,
+        ) as client:
+            # Step 1: Hit the search page to get cookies
+            page_resp = await client.get(search_url, headers=browser_headers)
+            # We don't check status — even a 403 gives us useful cookies
+
+            # Step 2: Call the JSON API with cookies from step 1
             resp = await client.get(
                 "https://www.naukri.com/jobapi/v3/search",
-                headers=headers,
+                headers=api_headers,
                 params=params,
             )
             resp.raise_for_status()
@@ -394,7 +425,6 @@ async def fetch_naukri(
         for item in data.get("jobDetails", []):
             job_url = f"https://www.naukri.com{item.get('jdURL', '')}"
 
-            # Parse placeholders (location, salary are in here)
             placeholders = item.get("placeholders", [])
             job_loc = ""
             salary_str = ""
@@ -406,7 +436,6 @@ async def fetch_naukri(
                 elif ptype in ("salary", "ctc") or "salary" in ptype.lower():
                     salary_str = label
 
-            # Skills from tagsAndSkills
             skills_list = [
                 s.get("label", "") for s in item.get("tagsAndSkills", [])
                 if s.get("label")
@@ -420,7 +449,7 @@ async def fetch_naukri(
                 "description": strip_html(item.get("jobDescription", "")),
                 "source":      "naukri",
                 "work_type":   "remote" if item.get("isWFH") else "onsite",
-                "salary_min":  None,   # Naukri salary is a string (e.g. "10-15 Lacs")
+                "salary_min":  None,
                 "salary_max":  None,
                 "salary_str":  salary_str,
                 "skills":      skills_list,
@@ -431,7 +460,7 @@ async def fetch_naukri(
         return jobs
 
     except httpx.HTTPStatusError as e:
-        print(f"[NAUKRI] HTTP {e.response.status_code} for '{keyword}': {e}")
+        print(f"[NAUKRI] HTTP {e.response.status_code} for '{keyword}' (recaptcha still blocking)")
         return []
     except Exception as e:
         print(f"[NAUKRI] Error for '{keyword}': {e}")
@@ -549,6 +578,85 @@ async def fetch_remotive(search: str = "", limit: int = 15) -> list[dict]:
         return []
 
 
+# ─── Source 5: Himalayas.app (free, curated tech jobs, no key) ────────────────
+
+async def fetch_himalayas(search: str = "", limit: int = 25) -> list[dict]:
+    """
+    Himalayas.app — free job board API with curated tech listings.
+    No API key needed. Good mix of remote + India jobs.
+    """
+    try:
+        params = {
+            "limit":  limit,
+            "offset": 0,
+        }
+        if search:
+            params["query"] = search
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(
+                "https://himalayas.app/jobs/api",
+                params=params,
+                headers={"Accept": "application/json"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        jobs = []
+        for item in data.get("jobs", []):
+            title = item.get("title", "")
+            company = item.get("companyName", "") or item.get("company", "")
+            if not title or not company:
+                continue
+
+            # Build a meaningful description from available fields
+            desc_parts = []
+            if item.get("description"):
+                desc_parts.append(item["description"])
+            if item.get("excerpt"):
+                desc_parts.append(item["excerpt"])
+
+            categories = item.get("categories", [])
+            if isinstance(categories, list):
+                skills = [c for c in categories if isinstance(c, str)]
+            else:
+                skills = []
+
+            slug = item.get("slug", "")
+            company_slug = item.get("companySlug", "")
+            url = item.get("applicationLink", "") or item.get("url", "")
+            if not url and slug:
+                url = f"https://himalayas.app/jobs/{slug}"
+
+            location_parts = []
+            if item.get("locationRestrictions"):
+                if isinstance(item["locationRestrictions"], list):
+                    location_parts = item["locationRestrictions"]
+                else:
+                    location_parts = [str(item["locationRestrictions"])]
+
+            jobs.append({
+                "title":       title,
+                "company":     company,
+                "url":         url,
+                "location":    ", ".join(location_parts) if location_parts else "Remote",
+                "description": strip_html(" ".join(desc_parts)),
+                "source":      "himalayas",
+                "work_type":   "remote",
+                "salary_min":  item.get("minSalary"),
+                "salary_max":  item.get("maxSalary"),
+                "skills":      skills,
+                "tags":        skills[:5],
+            })
+
+        print(f"[HIMALAYAS] '{search}' → {len(jobs)} jobs")
+        return jobs
+
+    except Exception as e:
+        print(f"[HIMALAYAS] Error: {e}")
+        return []
+
+
 # ─── LLM Scoring ─────────────────────────────────────────────────────────────
 
 async def score_single_job(title: str, desc: str, resume: str) -> dict:
@@ -573,6 +681,28 @@ Return ONLY: {{"score": <number>, "reasoning": "<brief>"}}"""
         return {"score": 0, "reasoning": f"Error: {e}"}
 
 
+def _extract_list_from_result(result) -> list[dict]:
+    """
+    The LLM sometimes wraps the array in an object like {"jobs": [...]}
+    or returns a single object instead of a list. This helper normalises
+    all of those cases into a flat list.
+    """
+    if isinstance(result, list):
+        return result
+    if isinstance(result, dict):
+        if "error" in result:
+            raise ValueError(f"LLM returned error: {result.get('error')}")
+        # Try every common wrapper key
+        for key in ["results", "scores", "jobs", "data", "items",
+                    "job_scores", "scoring", "response"]:
+            if key in result and isinstance(result[key], list):
+                return result[key]
+        # Last resort: if the dict has "index" and "score" it's a single item
+        if "index" in result and "score" in result:
+            return [result]
+    raise ValueError(f"Unexpected LLM format: {type(result).__name__}")
+
+
 async def batch_score_jobs(jobs_list: list[dict], resume: str, user_loc: str) -> list[dict]:
     if not jobs_list:
         return []
@@ -588,22 +718,22 @@ CANDIDATE: {resume[:700]}
 JOBS:
 {chr(10).join(lines)}
 
-Return ONLY a JSON array: [{{"index":0,"score":85,"reasoning":"..."}}, ...]"""
+Return ONLY a JSON array like this (one entry per job):
+[{{"index":0,"score":85,"reasoning":"..."}}, {{"index":1,"score":40,"reasoning":"..."}}]
+
+Rules:
+- "index" must match the [N] number of the job
+- "score" is 0-100 (integer)
+- "reasoning" is a short sentence
+- Return ALL jobs, even low-scoring ones"""
 
     try:
         result = await llm_provider.generate_json(
-            prompt=prompt, system_prompt="Return ONLY a valid JSON array. No markdown, no extra keys.",
+            prompt=prompt,
+            system_prompt="Return ONLY a valid JSON array. No markdown fences, no wrapper object, just the raw array.",
             model="openai-large",
         )
-        if isinstance(result, list):
-            return result
-        if isinstance(result, dict):
-            if "error" in result:
-                raise ValueError("LLM returned error")
-            for key in ["results", "scores", "jobs", "data"]:
-                if key in result and isinstance(result[key], list):
-                    return result[key]
-        raise ValueError("Unexpected format")
+        return _extract_list_from_result(result)
     except Exception as e:
         print(f"[SCOUT] Batch scoring failed ({e}), falling back to individual...")
         scores = []
@@ -717,21 +847,23 @@ async def run_scout(
 
             # 5. Scrape ALL sources concurrently
             per_query  = max(max_jobs // len(queries), 15)
-            primary_q  = queries[0]   # Use first query for Naukri + Adzuna
+            primary_q  = queries[0]
 
             print(f"[SCOUT] Launching all sources concurrently...")
 
-            # Build coroutines: one jobspy call per query + naukri + adzuna + remotive
+            # Build coroutines: JobSpy per query + Naukri per query + others
             jobspy_tasks   = [fetch_jobspy(q, user_location, per_query) for q in queries]
-            naukri_task    = fetch_naukri(primary_q, user_location, results=25)
+            naukri_tasks   = [fetch_naukri(q, user_location, results=25) for q in queries[:2]]
             adzuna_task    = fetch_adzuna(primary_q, user_location, results_per_page=20)
-            remotive_task  = fetch_remotive(search=primary_q, limit=15)
+            remotive_task  = fetch_remotive(search=primary_q, limit=20)
+            himalayas_task = fetch_himalayas(search=primary_q, limit=25)
 
             results = await asyncio.gather(
                 *jobspy_tasks,
-                naukri_task,
+                *naukri_tasks,
                 adzuna_task,
                 remotive_task,
+                himalayas_task,
                 return_exceptions=True,
             )
 
@@ -889,6 +1021,7 @@ async def run_scout(
                         stats["saved"] += 1
 
             run.status = "completed"
+            run.completed_at = datetime.now(timezone.utc)
             run.result = stats
             await db.commit()
             print(f"[SCOUT] ✓ Done! {stats}")
@@ -898,6 +1031,7 @@ async def run_scout(
             import traceback
             traceback.print_exc()
             run.status = "failed"
+            run.completed_at = datetime.now(timezone.utc)
             run.result = {"error": str(e)}
             await db.commit()
             raise
