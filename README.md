@@ -46,12 +46,63 @@ JobPilot is a monorepo with three distinct parts:
 
 ## 🚀 Getting Started & Installation
 
-### Prerequisites
+### 🐳 Option A: Docker Setup (Recommended — Easiest!)
+
+This is the fastest way to run JobPilot. You don't need to install Python, Node.js, or any packages manually. Docker handles everything automatically.
+
+**Prerequisites:** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) (free, available for Windows, Mac, and Linux).
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/YOUR_USERNAME/JobPilot.git
+   cd JobPilot
+   ```
+
+2. **Setup your environment variables:**
+   ```bash
+   # Copy the example file and edit it with your API keys
+   cp backend/.env.example backend/.env
+   ```
+   Open `backend/.env` in any text editor and fill in your values (the defaults work for basic usage).
+
+3. **Start everything with one command:**
+   ```bash
+   docker compose up --build
+   ```
+   > ☕ The first build takes 2-5 minutes (downloading Python, Node.js, and packages). Subsequent starts are instant because Docker caches everything.
+
+4. **Open the app:**
+   *   🌐 **Dashboard:** [http://localhost:3000](http://localhost:3000)
+   *   📡 **API Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
+
+5. **To stop:**
+   ```bash
+   docker compose down
+   ```
+
+**Useful Docker Commands:**
+| Command | What it does |
+|---|---|
+| `docker compose up --build` | Start everything (rebuild after code changes) |
+| `docker compose up -d` | Start in background (detached mode) |
+| `docker compose down` | Stop all containers |
+| `docker compose logs -f` | View live logs from all services |
+| `docker compose logs backend` | View backend logs only |
+
+> 💾 **Your data is safe!** The SQLite database and uploaded resumes are stored on your computer at `backend/data/`, not inside Docker. Stopping or deleting containers will NOT delete your data.
+
+---
+
+### 🔧 Option B: Manual Setup (For Development)
+
+Use this if you want to modify the code and see changes in real-time with hot-reload.
+
+#### Prerequisites
 *   [Node.js](https://nodejs.org/) (v18+)
 *   [Python](https://www.python.org/) (v3.10+)
 *   A Chromium-based browser (Chrome, Edge, or Brave)
 
-### Step 1: Backend Setup (Python)
+#### Step 1: Backend Setup (Python)
 
 1. **Navigate to the backend directory:**
    ```bash
@@ -79,7 +130,7 @@ JobPilot is a monorepo with three distinct parts:
    python -m uvicorn app.main:app --reload --port 8000
    ```
 
-### Step 2: Frontend Setup (Next.js)
+#### Step 2: Frontend Setup (Next.js)
 
 1. **Navigate to the frontend directory and install packages:**
    ```bash
@@ -88,7 +139,7 @@ JobPilot is a monorepo with three distinct parts:
    npm run dev
    ```
 
-### Step 3: Quick Start (Windows)
+#### Step 3: Quick Start (Windows)
 
 Double-click **`start.bat`** in the root folder to launch both the backend and frontend simultaneously. Then open **[http://localhost:3000](http://localhost:3000)** to access the dashboard.
 

@@ -1,0 +1,36 @@
+# =============================================================================
+# Backend .dockerignore
+# =============================================================================
+# These files/folders are NOT copied into the Docker image.
+# This keeps the image small and avoids leaking secrets.
+# =============================================================================
+
+# Virtual environments (your local Python packages — Docker installs its own)
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Environment secrets (passed via docker-compose instead)
+.env
+
+# Database files (mounted as a volume, not baked into the image)
+*.db
+data/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docker files (no need to copy Dockerfile into itself!)
+Dockerfile
+.dockerignore
+
+# Git
+.git/
+.gitignore

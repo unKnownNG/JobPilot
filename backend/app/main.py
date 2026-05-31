@@ -78,8 +78,9 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",     # Next.js dev server
+        "http://localhost:3000",     # Next.js dev server (local)
         "http://127.0.0.1:3000",
+        "http://frontend:3000",      # Next.js inside Docker Compose network
     ],
     allow_origin_regex=r"^chrome-extension://.*$",  # Chrome Extension
     allow_credentials=True,

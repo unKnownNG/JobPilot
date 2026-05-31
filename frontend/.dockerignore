@@ -1,0 +1,30 @@
+# =============================================================================
+# Frontend .dockerignore
+# =============================================================================
+# These files/folders are NOT copied into the Docker image.
+# =============================================================================
+
+# Node modules (Docker installs its own via npm ci)
+node_modules/
+
+# Next.js build output (Docker builds its own)
+.next/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docker files
+Dockerfile
+.dockerignore
+
+# Git
+.git/
+.gitignore
+
+# Documentation (not needed at runtime)
+README.md
+AGENTS.md
+CLAUDE.md

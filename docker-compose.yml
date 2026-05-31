@@ -1,0 +1,89 @@
+# =============================================================================
+# docker-compose.yml — Run JobPilot with a Single Command
+# =============================================================================
+# 
+# WHAT IS THIS?
+# Docker Compose coordinates multiple containers (backend + frontend) so
+# they start together, can talk to each other, and share a network.
+#
+# HOW TO USE:
+#   1. Install Docker Desktop: https://www.docker.com/products/docker-desktop
+#   2. Clone this repo
+#   3. Copy backend/.env.example to backend/.env and fill in your values
+#   4. Run:  docker compose up --build
+#   5. Open: http://localhost:3000
+#
+# USEFUL COMMANDS:
+#   docker compose up --build      Start everything (first time or after code changes)
+#   docker compose up              Start everything (uses cached build)
+#   docker compose up -d           Start in background (detached mode)
+#   docker compose down            Stop everything
+#   docker compose logs -f         View live logs from all containers
+#   docker compose logs backend    View logs from backend only
+#
+# =============================================================================
+
+services:
+  # ─── Backend (FastAPI + Python) ────────────────────────────────────────────
+  backend:
+    # Build the Docker image using backend/Dockerfile
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+
+    # Name the running container "jobpilot-backend" (for easy identification)
+    container_name: jobpilot-backend
+
+    # Map port 8000 inside the container → port 8000 on your computer.
+    # This means http://localhost:8000 on your PC goes to the backend.
+    # The Chrome Extension needs this to talk to the API!
+    ports:
+      - "8000:8000"
+
+    # Mount your local data directory into the container.
+    # This is the "wormhole" that keeps your SQLite database on your hard drive
+    # even when the container is deleted.
+    #
+    # Left side  = folder on YOUR computer
+    # Right side = folder INSIDE the container
+    volumes:
+      - ./backend/data:/app/data
+
+    # Load environment variables from your .env file
+    env_file:
+      - ./backend/.env
+
+    # Health check — Docker will monitor this endpoint
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+    # Restart the container automatically if it crashes
+    restart: unless-stopped
+
+  # ─── Frontend (Next.js + React) ────────────────────────────────────────────
+  frontend:
+    # Build the Docker image using frontend/Dockerfile
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+
+    # Name the running container "jobpilot-frontend"
+    container_name: jobpilot-frontend
+
+    # Map port 3000 inside the container → port 3000 on your computer.
+    # This means http://localhost:3000 opens the dashboard.
+    ports:
+      - "3000:3000"
+
+    # Wait for the backend to be healthy before starting the frontend.
+    # This prevents the frontend from showing errors because the API isn't ready yet.
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    # Restart the container automatically if it crashes
+    restart: unless-stopped
