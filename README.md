@@ -54,7 +54,7 @@ This is the fastest way to run JobPilot. You don't need to install Python, Node.
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/JobPilot.git
+   git clone https://github.com/unKnownNG/JobPilot.git
    cd JobPilot
    ```
 
