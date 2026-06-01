@@ -215,14 +215,14 @@ export default function ResumeView() {
               <h2 className="text-xl font-bold text-fg">{String(rd.name)}</h2>
               <p className="text-sm text-accent font-medium mt-0.5">{String(rd.title)}</p>
               <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
-                {rd.email && <span className="text-xs text-muted-fg">✉ {String(rd.email)}</span>}
-                {rd.phone && <span className="text-xs text-muted-fg">📱 {String(rd.phone)}</span>}
-                {rd.location && <span className="text-xs text-muted-fg">📍 {String(rd.location)}</span>}
+                {!!rd.email && <span className="text-xs text-muted-fg">✉ {String(rd.email)}</span>}
+                {!!rd.phone && <span className="text-xs text-muted-fg">📱 {String(rd.phone)}</span>}
+                {!!rd.location && <span className="text-xs text-muted-fg">📍 {String(rd.location)}</span>}
               </div>
               <div className="flex flex-wrap gap-x-4 mt-1">
-                {rd.linkedin && <a href={String(rd.linkedin)} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">LinkedIn</a>}
-                {rd.github && <a href={String(rd.github)} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">GitHub</a>}
-                {rd.portfolio && <a href={String(rd.portfolio)} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">Portfolio</a>}
+                {!!rd.linkedin && <a href={String(rd.linkedin)} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">LinkedIn</a>}
+                {!!rd.github && <a href={String(rd.github)} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">GitHub</a>}
+                {!!rd.portfolio && <a href={String(rd.portfolio)} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">Portfolio</a>}
               </div>
             </div>
             <div className="text-right shrink-0">
@@ -233,7 +233,7 @@ export default function ResumeView() {
             </div>
           </div>
 
-          {rd.summary && (
+          {!!rd.summary && (
             <div>
               <h4 className="text-xs font-semibold text-muted-fg uppercase tracking-wider mb-2">Summary</h4>
               <p className="text-sm text-muted-fg leading-relaxed">{String(rd.summary)}</p>
@@ -287,9 +287,9 @@ export default function ResumeView() {
                 <div key={i} className="mb-3 pl-4 border-l-2 border-warning/30">
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-medium text-fg">{String(proj.name)}</p>
-                    {proj.url && <a href={String(proj.url)} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">↗ Link</a>}
+                    {!!proj.url && <a href={String(proj.url)} target="_blank" rel="noopener" className="text-xs text-primary hover:underline">↗ Link</a>}
                   </div>
-                  {proj.description && <p className="text-xs text-muted-fg mt-0.5">{String(proj.description)}</p>}
+                  {!!proj.description && <p className="text-xs text-muted-fg mt-0.5">{String(proj.description)}</p>}
                   {Array.isArray(proj.tech_stack) && proj.tech_stack.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5">
                       {(proj.tech_stack as string[]).map(t => (

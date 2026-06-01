@@ -342,9 +342,9 @@ export default function AgentsView({ runs, onRefresh }: Props) {
                 <div className="flex items-center gap-2">
                   <StatusDot status={r.status} />
                   <span className="text-xs text-muted-fg capitalize">{r.status}</span>
-                  {r.result?.job_title && (
+                  {!!r.result?.job_title && (
                     <span className="text-xs text-fg font-medium">
-                      {String(r.result.job_title)}{r.result.company ? ` @ ${r.result.company}` : ""}
+                      {String(r.result.job_title)}{r.result.company ? ` @ ${String(r.result.company)}` : ""}
                     </span>
                   )}
                 </div>
