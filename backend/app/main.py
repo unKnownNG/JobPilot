@@ -95,7 +95,13 @@ from fastapi.staticfiles import StaticFiles
 app.include_router(api_router)
 
 # --- Mount Static Files for Screenshots ---
+# Ensure the directory exists before mounting — on a fresh clone, the volume
+# mount may not have created these subdirectories yet, which causes a crash.
 storage_dir = Path(settings.STORAGE_DIR)
+storage_dir.mkdir(parents=True, exist_ok=True)
+(storage_dir / "resumes").mkdir(exist_ok=True)
+(storage_dir / "cover_letters").mkdir(exist_ok=True)
+(storage_dir / "screenshots").mkdir(exist_ok=True)
 app.mount("/storage", StaticFiles(directory=storage_dir), name="storage")
 
 
