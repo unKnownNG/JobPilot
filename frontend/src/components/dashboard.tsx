@@ -97,10 +97,10 @@ export default function Dashboard() {
             {open && (
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium truncate text-fg">{user?.name}</p>
-                <p className="text-[11px] text-muted-fg truncate">{user?.email}</p>
+                <p className="text-[11px] text-muted-fg truncate">Local user</p>
               </div>
             )}
-            <button onClick={logout} title="Sign out"
+            <button onClick={logout} title="Switch user"
               className="text-muted-fg hover:text-danger transition-colors cursor-pointer shrink-0">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
                 <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" />

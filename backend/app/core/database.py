@@ -41,7 +41,10 @@ engine = create_async_engine(
     
     # SQLite-specific: allow multiple threads to share a connection
     # (SQLite is single-writer by default, this is safe for local use)
-    connect_args={"check_same_thread": False},
+    connect_args={
+        "check_same_thread": False,
+        "timeout": 30,  # 30 seconds busy timeout
+    },
 )
 
 

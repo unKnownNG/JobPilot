@@ -796,186 +796,183 @@ async def run_scout(
         "source_counts": {},
     }
 
+    # 1. Create agent run record and load resume/known jobs in short sessions
     async with async_session_factory() as db:
         run = AgentRun(
             user_id=user_id, agent_type="scout", status="running",
             config={"search": search_term, "min_score": min_score},
         )
         db.add(run)
-        await db.flush()
+        await db.commit()
+        run_id = run.id
 
-        try:
-            # 1. Load active resume
-            res = await db.execute(
-                select(MasterResume).where(
-                    MasterResume.user_id == user_id,
-                    MasterResume.is_active == True,
+    async with async_session_factory() as db:
+        # Load active resume
+        res = await db.execute(
+            select(MasterResume).where(
+                MasterResume.user_id == user_id,
+                MasterResume.is_active == True,
+            )
+        )
+        resume = res.scalar_one_or_none()
+        if not resume:
+            run_update = await db.get(AgentRun, run_id)
+            if run_update:
+                run_update.status = "failed"
+                run_update.result = {"error": "No active resume"}
+                run_update.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+            return {"error": "No active resume. Create one in the Resume tab first."}
+
+        resume_data   = resume.resume_data or {}
+        resume_text   = build_resume_summary(resume_data)
+        user_skills   = extract_skills_list(resume_data)
+
+        # 2. Always resolve to a valid India location
+        raw_location  = resume_data.get("location", "")
+        user_location = resolve_location(raw_location)
+        print(f"[SCOUT] Location resolved: '{raw_location}' → '{user_location}'")
+
+        # Load known URLs AND (title, company) fingerprints from DB
+        existing = await db.execute(
+            select(JobPosting.url, JobPosting.title, JobPosting.company)
+            .where(JobPosting.user_id == user_id)
+        )
+        existing_rows = existing.all()
+        known_urls         = {normalize_url(r[0]) for r in existing_rows}
+        known_fingerprints = {job_fingerprint(r[1], r[2]) for r in existing_rows}
+
+    # 3. Build search queries
+    queries = [search_term] if search_term else build_search_queries(resume_data)
+    if not queries:
+        queries = ["software engineer"]   # Safe fallback
+    stats["queries_used"] = queries
+    print(f"[SCOUT] Queries: {queries} | Skills: {user_skills[:8]}")
+
+    try:
+        # 4. Scrape ALL sources concurrently (outside database session!)
+        per_query  = max(max_jobs // len(queries), 15)
+        primary_q  = queries[0]
+
+        print(f"[SCOUT] Launching all sources concurrently...")
+
+        # Build coroutines: JobSpy per query + Naukri per query + others
+        jobspy_tasks   = [fetch_jobspy(q, user_location, per_query) for q in queries]
+        naukri_tasks   = [fetch_naukri(q, user_location, results=25) for q in queries[:2]]
+        adzuna_task    = fetch_adzuna(primary_q, user_location, results_per_page=20)
+        remotive_task  = fetch_remotive(search=primary_q, limit=20)
+        himalayas_task = fetch_himalayas(search=primary_q, limit=25)
+
+        results = await asyncio.gather(
+            *jobspy_tasks,
+            *naukri_tasks,
+            adzuna_task,
+            remotive_task,
+            himalayas_task,
+            return_exceptions=True,
+        )
+
+        # Unpack results
+        all_jobs: list[dict] = []
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                print(f"[SCOUT] Source {i} failed: {r}")
+                stats["errors"] += 1
+                continue
+            if isinstance(r, list):
+                all_jobs.extend(r)
+
+        # Track source counts
+        for j in all_jobs:
+            src = j.get("source", "unknown")
+            stats["source_counts"][src] = stats["source_counts"].get(src, 0) + 1
+        stats["sources"] = list(stats["source_counts"].keys())
+        stats["fetched"] = len(all_jobs)
+        print(f"[SCOUT] Total fetched: {stats['fetched']} | By source: {stats['source_counts']}")
+
+        # 5. Filter Layer 1: Title blocklist
+        tech_jobs = [j for j in all_jobs if is_tech_job(j["title"])]
+        stats["blocked_title"] = stats["fetched"] - len(tech_jobs)
+        print(f"[SCOUT] After title filter: {len(tech_jobs)} ({stats['blocked_title']} blocked)")
+
+        # 6. Filter Layer 2: Skills overlap
+        if user_skills:
+            skilled_jobs = []
+            for j in tech_jobs:
+                combined_text = (
+                    j.get("title", "") + " "
+                    + j["description"] + " "
+                    + " ".join(j.get("skills", []))
                 )
-            )
-            resume = res.scalar_one_or_none()
-            if not resume:
-                run.status = "failed"
-                run.result = {"error": "No active resume"}
-                await db.commit()
-                return {"error": "No active resume. Create one in the Resume tab first."}
+                has_description = len(j["description"].strip()) > 50
+                overlap = skills_overlap_score(combined_text, user_skills)
 
-            resume_data   = resume.resume_data or {}
-            resume_text   = build_resume_summary(resume_data)
-            user_skills   = extract_skills_list(resume_data)
+                if overlap >= 1:
+                    j["_skill_overlap"] = overlap
+                    skilled_jobs.append(j)
+                elif not has_description:
+                    j["_skill_overlap"] = 0
+                    skilled_jobs.append(j)
+                else:
+                    stats["blocked_skills"] += 1
 
-            # 2. Always resolve to a valid India location
-            raw_location  = resume_data.get("location", "")
-            user_location = resolve_location(raw_location)
-            print(f"[SCOUT] Location resolved: '{raw_location}' → '{user_location}'")
+            skilled_jobs.sort(key=lambda x: x.get("_skill_overlap", 0), reverse=True)
+            print(f"[SCOUT] After skills filter: {len(skilled_jobs)} ({stats['blocked_skills']} blocked)")
+        else:
+            skilled_jobs = tech_jobs
 
-            # 3. Build search queries
-            queries = [search_term] if search_term else build_search_queries(resume_data)
-            if not queries:
-                queries = ["software engineer"]   # Safe fallback
-            stats["queries_used"] = queries
-            print(f"[SCOUT] Queries: {queries} | Skills: {user_skills[:8]}")
+        # 7. Deduplicate
+        seen_urls:         set[str] = set()
+        seen_fingerprints: set[str] = set()
+        new_jobs: list[dict] = []
+        dupes = 0
+        for j in skilled_jobs:
+            url = normalize_url(j.get("url", ""))
+            fp  = job_fingerprint(j.get("title", ""), j.get("company", ""))
 
-            # 4. Load known URLs AND (title, company) fingerprints from DB
-            #    so we block duplicates both within a run and across runs.
-            existing = await db.execute(
-                select(JobPosting.url, JobPosting.title, JobPosting.company)
-                .where(JobPosting.user_id == user_id)
-            )
-            existing_rows = existing.all()
-            known_urls         = {normalize_url(r[0]) for r in existing_rows}
-            known_fingerprints = {job_fingerprint(r[1], r[2]) for r in existing_rows}
+            if not url:
+                continue
+            if url in known_urls or url in seen_urls:
+                dupes += 1
+                continue
+            if fp in known_fingerprints or fp in seen_fingerprints:
+                dupes += 1
+                continue
 
-            # 5. Scrape ALL sources concurrently
-            per_query  = max(max_jobs // len(queries), 15)
-            primary_q  = queries[0]
+            seen_urls.add(url)
+            seen_fingerprints.add(fp)
+            new_jobs.append(j)
 
-            print(f"[SCOUT] Launching all sources concurrently...")
+        stats["new"]    = len(new_jobs)
+        stats["dupes"]  = dupes
+        print(f"[SCOUT] {stats['new']} unique new jobs to score ({dupes} duplicates removed)")
 
-            # Build coroutines: JobSpy per query + Naukri per query + others
-            jobspy_tasks   = [fetch_jobspy(q, user_location, per_query) for q in queries]
-            naukri_tasks   = [fetch_naukri(q, user_location, results=25) for q in queries[:2]]
-            adzuna_task    = fetch_adzuna(primary_q, user_location, results_per_page=20)
-            remotive_task  = fetch_remotive(search=primary_q, limit=20)
-            himalayas_task = fetch_himalayas(search=primary_q, limit=25)
+        if not new_jobs:
+            async with async_session_factory() as db:
+                run_update = await db.get(AgentRun, run_id)
+                if run_update:
+                    run_update.status = "completed"
+                    run_update.result = stats
+                    run_update.completed_at = datetime.now(timezone.utc)
+                    await db.commit()
+            return stats
 
-            results = await asyncio.gather(
-                *jobspy_tasks,
-                *naukri_tasks,
-                adzuna_task,
-                remotive_task,
-                himalayas_task,
-                return_exceptions=True,
-            )
+        # 8. LLM batch score in chunks of 8 (outside database session!)
+        scored_results = []
+        for i in range(0, len(new_jobs), 8):
+            chunk = new_jobs[i:i + 8]
+            try:
+                scores = await batch_score_jobs(chunk, resume_text, user_location)
+                stats["scored"] += len(scores)
+                scored_results.append((chunk, scores))
+            except Exception as e:
+                print(f"[SCOUT] Scoring chunk error: {e}")
+                stats["errors"] += 1
+                continue
 
-            # Unpack results (last 3 are naukri, adzuna, remotive)
-            all_jobs: list[dict] = []
-            num_jobspy = len(jobspy_tasks)
-
-            for i, r in enumerate(results):
-                if isinstance(r, Exception):
-                    print(f"[SCOUT] Source {i} failed: {r}")
-                    stats["errors"] += 1
-                    continue
-                if isinstance(r, list):
-                    all_jobs.extend(r)
-
-            # Track source counts
-            for j in all_jobs:
-                src = j.get("source", "unknown")
-                stats["source_counts"][src] = stats["source_counts"].get(src, 0) + 1
-            stats["sources"] = list(stats["source_counts"].keys())
-            stats["fetched"] = len(all_jobs)
-            print(f"[SCOUT] Total fetched: {stats['fetched']} | By source: {stats['source_counts']}")
-
-            # 6. Filter Layer 1: Title blocklist
-            tech_jobs = [j for j in all_jobs if is_tech_job(j["title"])]
-            stats["blocked_title"] = stats["fetched"] - len(tech_jobs)
-            print(f"[SCOUT] After title filter: {len(tech_jobs)} ({stats['blocked_title']} blocked)")
-
-            # 7. Filter Layer 2: Skills overlap
-            #
-            # Strategy:
-            #   - Match skills against BOTH description and job title
-            #   - Jobs with empty descriptions get overlap=0 but still PASS
-            #     (their description just hasn't been fetched yet; we let the
-            #     LLM decide rather than silently dropping them)
-            #   - Jobs with a description that mentions ≥1 skill pass normally
-            #   - Jobs with a description that mentions NO skills are kept if
-            #     there are fewer than 30 candidates total (don't be too picky
-            #     when the pool is small)
-            if user_skills:
-                skilled_jobs = []
-                for j in tech_jobs:
-                    # Check title + description + naukri skills field
-                    combined_text = (
-                        j.get("title", "") + " "
-                        + j["description"] + " "
-                        + " ".join(j.get("skills", []))
-                    )
-                    has_description = len(j["description"].strip()) > 50
-                    overlap = skills_overlap_score(combined_text, user_skills)
-
-                    if overlap >= 1:
-                        j["_skill_overlap"] = overlap
-                        skilled_jobs.append(j)
-                    elif not has_description:
-                        # No description fetched yet — give it the benefit of the doubt
-                        j["_skill_overlap"] = 0
-                        skilled_jobs.append(j)
-                    else:
-                        stats["blocked_skills"] += 1
-
-                # Sort by skill overlap (highest first), empty-desc jobs go last
-                skilled_jobs.sort(key=lambda x: x.get("_skill_overlap", 0), reverse=True)
-                print(f"[SCOUT] After skills filter: {len(skilled_jobs)} ({stats['blocked_skills']} blocked)")
-            else:
-                skilled_jobs = tech_jobs
-
-            # 8. Deduplicate — two layers:
-            #    a) Normalised URL  (catches same job, same source, tracking params stripped)
-            #    b) (title, company) fingerprint  (catches same job from different sources)
-            seen_urls:         set[str] = set()
-            seen_fingerprints: set[str] = set()
-            new_jobs: list[dict] = []
-            dupes = 0
-            for j in skilled_jobs:
-                url = normalize_url(j.get("url", ""))
-                fp  = job_fingerprint(j.get("title", ""), j.get("company", ""))
-
-                if not url:
-                    continue
-                if url in known_urls or url in seen_urls:
-                    dupes += 1
-                    continue
-                if fp in known_fingerprints or fp in seen_fingerprints:
-                    dupes += 1
-                    continue
-
-                seen_urls.add(url)
-                seen_fingerprints.add(fp)
-                new_jobs.append(j)
-
-            stats["new"]    = len(new_jobs)
-            stats["dupes"]  = dupes
-            print(f"[SCOUT] {stats['new']} unique new jobs to score ({dupes} duplicates removed)")
-
-            if not new_jobs:
-                run.status = "completed"
-                run.result = stats
-                await db.commit()
-                return stats
-
-            # 9. LLM batch score in chunks of 8
-            for i in range(0, len(new_jobs), 8):
-                chunk = new_jobs[i:i + 8]
-                try:
-                    scores = await batch_score_jobs(chunk, resume_text, user_location)
-                    stats["scored"] += len(scores)
-                except Exception as e:
-                    print(f"[SCOUT] Scoring chunk error: {e}")
-                    stats["errors"] += 1
-                    continue
-
+        # 9. Save scored jobs and update status in a final database session
+        async with async_session_factory() as db:
+            for chunk, scores in scored_results:
                 for item in scores:
                     idx   = item.get("index", -1)
                     score = item.get("score", 0)
@@ -1016,24 +1013,27 @@ async def run_scout(
                             },
                             status="discovered",
                         ))
-                        known_urls.add(normalize_url(raw["url"]))
-                        known_fingerprints.add(job_fingerprint(raw["title"], raw["company"]))
                         stats["saved"] += 1
 
-            run.status = "completed"
-            run.completed_at = datetime.now(timezone.utc)
-            run.result = stats
+            run_update = await db.get(AgentRun, run_id)
+            if run_update:
+                run_update.status = "completed"
+                run_update.completed_at = datetime.now(timezone.utc)
+                run_update.result = stats
             await db.commit()
             print(f"[SCOUT] ✓ Done! {stats}")
 
-        except Exception as e:
-            print(f"[SCOUT] Fatal error: {e}")
-            import traceback
-            traceback.print_exc()
-            run.status = "failed"
-            run.completed_at = datetime.now(timezone.utc)
-            run.result = {"error": str(e)}
+    except Exception as e:
+        print(f"[SCOUT] Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
+        async with async_session_factory() as db:
+            run_update = await db.get(AgentRun, run_id)
+            if run_update:
+                run_update.status = "failed"
+                run_update.completed_at = datetime.now(timezone.utc)
+                run_update.result = {"error": str(e)}
             await db.commit()
-            raise
+        raise
 
     return stats

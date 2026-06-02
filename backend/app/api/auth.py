@@ -1,15 +1,16 @@
 # =============================================================================
-# api/auth.py — Authentication Endpoints
+# api/auth.py — Authentication Endpoints (Simplified)
 # =============================================================================
-# WHAT IS A ROUTER?
-# A router is a group of related API endpoints. Instead of putting every
-# endpoint in main.py, we organize them by feature (auth, jobs, resumes, etc.)
-# 
-# WHAT IS AN ENDPOINT?
-# An endpoint is a URL that your API responds to. For example:
-#   POST /api/auth/register  →  Creates a new user account
-#   POST /api/auth/login     →  Returns a JWT token
-#   GET  /api/auth/me        →  Returns the current user's profile
+# JobPilot uses a simple name-based setup instead of email/password login.
+# Since this is a local-first app that runs on your own machine, there's no
+# need for traditional authentication. On first launch, you enter your name
+# and a local user is auto-created with a JWT token.
+#
+# Endpoints:
+#   GET  /api/auth/status  →  Check if a user has been set up yet
+#   POST /api/auth/setup   →  Create or return the local user (just needs a name)
+#   GET  /api/auth/me      →  Returns the current user's profile
+#   PUT  /api/auth/me      →  Update the current user's name/preferences
 # =============================================================================
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -17,102 +18,73 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import hash_password, verify_password, create_access_token
+from app.core.security import hash_password, create_access_token
 from app.dependencies import get_current_user
 from app.models.user import User
 from app.schemas.user import (
-    UserRegister,
-    UserLogin,
+    UserSetup,
     UserUpdate,
     UserResponse,
     TokenResponse,
+    StatusResponse,
 )
 
 # Create a router with a prefix — all endpoints here will start with "/auth"
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-@router.post(
-    "/register",
-    response_model=TokenResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Register a new user account",
+@router.get(
+    "/status",
+    response_model=StatusResponse,
+    summary="Check if a user has been set up",
 )
-async def register(
-    data: UserRegister,           # FastAPI auto-validates the request body
-    db: AsyncSession = Depends(get_db),  # DI: get a database session
-):
+async def get_status(db: AsyncSession = Depends(get_db)):
     """
-    Register a new user account.
-    
-    Steps:
-    1. Check if email already exists
-    2. Hash the password (NEVER store plain text!)
-    3. Create the user in the database
-    4. Generate a JWT token
-    5. Return the token + user data
+    Check whether a local user exists.
+    The frontend uses this to decide whether to show the setup screen
+    or go straight to the dashboard.
     """
-    
-    # Step 1: Check for existing email
-    result = await db.execute(select(User).where(User.email == data.email))
-    existing_user = result.scalar_one_or_none()
-    
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered",
-        )
-    
-    # Step 2: Hash the password
-    hashed_pw = hash_password(data.password)
-    
-    # Step 3: Create user object and add to database
-    user = User(
-        email=data.email,
-        name=data.name,
-        hashed_password=hashed_pw,
-    )
-    db.add(user)
-    await db.flush()  # flush = write to DB but don't commit yet (gets the auto-generated ID)
-    
-    # Step 4: Create JWT token
-    access_token = create_access_token(data={"sub": user.id})
-    
-    # Step 5: Return response
-    return TokenResponse(
-        access_token=access_token,
-        user=UserResponse.model_validate(user),
-    )
+    result = await db.execute(select(User).limit(1))
+    user = result.scalar_one_or_none()
+    return StatusResponse(is_setup=user is not None)
 
 
 @router.post(
-    "/login",
+    "/setup",
     response_model=TokenResponse,
-    summary="Login and get an access token",
+    status_code=status.HTTP_200_OK,
+    summary="Set up the local user (first-time) or get a new token",
 )
-async def login(
-    data: UserLogin,
+async def setup(
+    data: UserSetup,
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Authenticate a user and return a JWT token.
+    Create the local user on first launch, or return a new token if already set up.
     
-    The token should be included in subsequent requests:
-        Authorization: Bearer <token>
+    This replaces the old register/login flow. Since JobPilot runs locally,
+    we just need a name — no email or password required.
     """
     
-    # Find user by email
-    result = await db.execute(select(User).where(User.email == data.email))
+    # Check if a user already exists
+    result = await db.execute(select(User).limit(1))
     user = result.scalar_one_or_none()
     
-    # Verify user exists AND password matches
-    # We use the same error for both cases to prevent email enumeration attacks
-    # (don't tell attackers whether an email exists or not)
-    if not user or not verify_password(data.password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
+    if user:
+        # User exists — update name if provided and return a fresh token
+        if data.name and data.name != user.name:
+            user.name = data.name
+            db.add(user)
+            await db.flush()
+    else:
+        # First-time setup — create the local user
+        user = User(
+            email=f"local@jobpilot.local",
+            name=data.name,
+            hashed_password=hash_password("jobpilot-local"),  # Dummy, never checked
         )
+        db.add(user)
+        await db.flush()
     
     # Generate token
     access_token = create_access_token(data={"sub": user.id})
@@ -129,7 +101,7 @@ async def login(
     summary="Get current user profile",
 )
 async def get_me(
-    current_user: User = Depends(get_current_user),  # DI: requires authentication
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get the currently authenticated user's profile.

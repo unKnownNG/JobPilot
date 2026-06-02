@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     # Leave empty for free tier (rate-limited but functional)
     POLLINATIONS_API_KEY: str = ""
     
+    # --- Adzuna API ---
+    # Free credentials can be obtained at developer.adzuna.com
+    ADZUNA_APP_ID: str = ""
+    ADZUNA_APP_KEY: str = ""
+    
     # --- File Storage ---
     STORAGE_DIR: str = "./data/storage"
     

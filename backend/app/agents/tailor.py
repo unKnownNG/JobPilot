@@ -123,118 +123,134 @@ async def run_tailor(user_id: str) -> dict:
         # Log agent run
         run = AgentRun(user_id=user_id, agent_type="tailor", status="running", config={})
         db.add(run)
-        await db.flush()
+        await db.commit()
+        run_id = run.id
 
-        try:
-            # 1. Get active resume
-            res = await db.execute(
-                select(MasterResume).where(
-                    MasterResume.user_id == user_id,
-                    MasterResume.is_active == True,
-                )
+    async with async_session_factory() as db:
+        # 1. Get active resume
+        res = await db.execute(
+            select(MasterResume).where(
+                MasterResume.user_id == user_id,
+                MasterResume.is_active == True,
             )
-            master = res.scalar_one_or_none()
-            if not master:
-                run.status = "failed"
-                run.result = {"error": "No active resume"}
+        )
+        master = res.scalar_one_or_none()
+        if not master:
+            run_update = await db.get(AgentRun, run_id)
+            if run_update:
+                run_update.status = "failed"
+                run_update.result = {"error": "No active resume"}
+                run_update.completed_at = datetime.now(timezone.utc)
                 await db.commit()
-                return {"error": "No active resume. Create one first."}
+            return {"error": "No active resume. Create one first."}
 
-            master_data = master.resume_data or {}
+        master_data = master.resume_data or {}
+        master_id = master.id
 
-            # 2. Find all approved jobs that don't already have a tailored resume
-            existing_tailored = await db.execute(
-                select(TailoredResume.job_posting_id).where(
-                    TailoredResume.user_id == user_id
-                )
+        # 2. Find all approved jobs that don't already have a tailored resume
+        existing_tailored = await db.execute(
+            select(TailoredResume.job_posting_id).where(
+                TailoredResume.user_id == user_id
             )
-            already_tailored = {r[0] for r in existing_tailored.all()}
+        )
+        already_tailored = {r[0] for r in existing_tailored.all()}
 
-            jobs_result = await db.execute(
-                select(JobPosting).where(
-                    JobPosting.user_id == user_id,
-                    JobPosting.status == "approved",
-                )
+        jobs_result = await db.execute(
+            select(JobPosting).where(
+                JobPosting.user_id == user_id,
+                JobPosting.status == "approved",
             )
-            approved_jobs = jobs_result.scalars().all()
+        )
+        approved_jobs = jobs_result.scalars().all()
 
-            # 3. Tailor resume for each approved job
-            for job in approved_jobs:
-                stats["processed"] += 1
+        # Convert jobs to dictionary list for use outside session
+        jobs_to_tailor = []
+        for job in approved_jobs:
+            stats["processed"] += 1
+            if job.id in already_tailored:
+                stats["skipped"] += 1
+                continue
+            jobs_to_tailor.append({
+                "id": job.id,
+                "title": job.title,
+                "description": job.description or ""
+            })
 
-                if job.id in already_tailored:
-                    stats["skipped"] += 1
-                    continue
+    # 3. Tailor resume for each approved job (outside database session!)
+    tailored_results = []
+    for job_info in jobs_to_tailor:
+        try:
+            # Call LLM to tailor
+            tailored_data = await tailor_resume_with_llm(
+                master_data=master_data,
+                job_title=job_info["title"],
+                job_desc=job_info["description"],
+            )
 
-                try:
-                    # Call LLM to tailor
-                    tailored_data = await tailor_resume_with_llm(
-                        master_data=master_data,
-                        job_title=job.title,
-                        job_desc=job.description or "",
-                    )
-
-                    # Compute diff for UI display
-                    diff = compute_diff(master_data, tailored_data)
-
-                    # Save tailored resume
-                    tailored = TailoredResume(
-                        user_id=user_id,
-                        master_resume_id=master.id,
-                        job_posting_id=job.id,
-                        resume_json=tailored_data,
-                        diff_from_master=diff,
-                    )
-                    db.add(tailored)
-                    await db.flush()
-
-                    # Create application record (or update existing)
-                    existing_app = await db.execute(
-                        select(Application).where(
-                            Application.user_id == user_id,
-                            Application.job_posting_id == job.id,
-                        )
-                    )
-                    app = existing_app.scalar_one_or_none()
-
-                    now = datetime.now(timezone.utc)
-                    if app:
-                        app.tailored_resume_id = tailored.id
-                        app.status = "resume_ready"
-                        app.status_history = (app.status_history or []) + [
-                            {"status": "resume_ready", "at": now.isoformat(), "note": "Resume tailored by AI"}
-                        ]
-                        app.updated_at = now
-                    else:
-                        app = Application(
-                            user_id=user_id,
-                            job_posting_id=job.id,
-                            tailored_resume_id=tailored.id,
-                            status="resume_ready",
-                            status_history=[
-                                {"status": "queued", "at": now.isoformat(), "note": "Job approved"},
-                                {"status": "resume_ready", "at": now.isoformat(), "note": "Resume tailored by AI"},
-                            ],
-                        )
-                        db.add(app)
-
-                    stats["tailored"] += 1
-
-                except Exception as e:
-                    print(f"[TAILOR] Error tailoring for '{job.title}': {e}")
-                    stats["errors"] += 1
-                    continue
-
-            run.status = "completed"
-            run.completed_at = datetime.now(timezone.utc)
-            run.result = stats
-            await db.commit()
-
+            # Compute diff for UI display
+            diff = compute_diff(master_data, tailored_data)
+            
+            tailored_results.append({
+                "job_id": job_info["id"],
+                "tailored_data": tailored_data,
+                "diff": diff
+            })
+            stats["tailored"] += 1
         except Exception as e:
-            run.status = "failed"
-            run.completed_at = datetime.now(timezone.utc)
-            run.result = {"error": str(e)}
-            await db.commit()
-            raise
+            print(f"[TAILOR] Error tailoring for '{job_info['title']}': {e}")
+            stats["errors"] += 1
+            continue
+
+    # 4. Save results in final session
+    async with async_session_factory() as db:
+        for res_item in tailored_results:
+            job_id = res_item["job_id"]
+            # Save tailored resume
+            tailored = TailoredResume(
+                user_id=user_id,
+                master_resume_id=master_id,
+                job_posting_id=job_id,
+                resume_json=res_item["tailored_data"],
+                diff_from_master=res_item["diff"],
+            )
+            db.add(tailored)
+            await db.flush()
+
+            # Create application record (or update existing)
+            existing_app = await db.execute(
+                select(Application).where(
+                    Application.user_id == user_id,
+                    Application.job_posting_id == job_id,
+                )
+            )
+            app = existing_app.scalar_one_or_none()
+
+            now = datetime.now(timezone.utc)
+            if app:
+                app.tailored_resume_id = tailored.id
+                app.status = "resume_ready"
+                app.status_history = (app.status_history or []) + [
+                    {"status": "resume_ready", "at": now.isoformat(), "note": "Resume tailored by AI"}
+                ]
+                app.updated_at = now
+            else:
+                app = Application(
+                    user_id=user_id,
+                    job_posting_id=job_id,
+                    tailored_resume_id=tailored.id,
+                    status="resume_ready",
+                    status_history=[
+                        {"status": "queued", "at": now.isoformat(), "note": "Job approved"},
+                        {"status": "resume_ready", "at": now.isoformat(), "note": "Resume tailored by AI"},
+                    ],
+                )
+                db.add(app)
+
+        run_update = await db.get(AgentRun, run_id)
+        if run_update:
+            run_update.status = "completed"
+            run_update.completed_at = datetime.now(timezone.utc)
+            run_update.result = stats
+        await db.commit()
 
     return stats

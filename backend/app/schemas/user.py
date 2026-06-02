@@ -8,7 +8,6 @@
 #
 # Why have both? Because they serve different purposes:
 # - You NEVER want to expose the hashed_password in an API response
-# - The client sends a plain password during registration, but the DB stores a hash
 # - Some fields are auto-generated (id, created_at) and shouldn't be in the request
 #
 # Pydantic validates all incoming data — if someone sends a number where a string
@@ -18,37 +17,20 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 
 
 # --- Request Schemas (what the client SENDS) ---
 
-class UserRegister(BaseModel):
-    """Schema for user registration request."""
-    email: str = Field(
-        ...,                      # ... means "required"
-        description="User's email address",
-        examples=["user@example.com"],
-    )
+class UserSetup(BaseModel):
+    """Schema for first-time setup — just needs a name."""
     name: str = Field(
         ...,
         min_length=2,
         max_length=100,
-        description="User's display name",
+        description="Your display name",
         examples=["Mohammed"],
     )
-    password: str = Field(
-        ...,
-        min_length=8,
-        description="Password (min 8 characters)",
-        examples=["securepassword123"],
-    )
-
-
-class UserLogin(BaseModel):
-    """Schema for login request."""
-    email: str = Field(..., examples=["user@example.com"])
-    password: str = Field(..., examples=["securepassword123"])
 
 
 class UserUpdate(BaseModel):
@@ -83,7 +65,12 @@ class UserResponse(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    """Schema for the login response — contains the JWT token."""
+    """Schema for the setup response — contains the JWT token."""
     access_token: str
     token_type: str = "bearer"  # Always "bearer" for JWT
     user: UserResponse
+
+
+class StatusResponse(BaseModel):
+    """Schema for checking if a user has been set up."""
+    is_setup: bool

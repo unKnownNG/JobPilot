@@ -2,7 +2,7 @@
 // popup.js — JobPilot Extension Popup Logic
 // =============================================================================
 // This file handles:
-//   1. Login / logout (stores JWT token in chrome.storage)
+//   1. Auto-connect to the local backend (no login needed)
 //   2. Scanning form fields on the active tab (via content script)
 //   3. Sending fields to backend for AI analysis
 //   4. Triggering the content script to fill the form
@@ -13,13 +13,13 @@ const API_BASE = "http://localhost:8000/api";
 
 // ─── DOM Elements ──────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
-const loginScreen  = $("login-screen");
+const setupScreen  = $("setup-screen");
 const mainScreen   = $("main-screen");
-const loginForm    = $("login-form");
-const loginBtn     = $("login-btn");
-const loginError   = $("login-error");
-const userEmail    = $("user-email");
-const logoutBtn    = $("logout-btn");
+const setupBtn     = $("setup-btn");
+const setupMessage = $("setup-message");
+const setupError   = $("setup-error");
+const userName     = $("user-name");
+const disconnectBtn = $("disconnect-btn");
 const pageTitle    = $("page-title");
 const pageUrl      = $("page-url");
 const scanBtn      = $("scan-btn");
@@ -66,11 +66,11 @@ async function apiRequest(endpoint, options = {}) {
   };
   const res = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });
   if (res.status === 401) {
-    // Token expired — force re-login
+    // Token expired — force re-setup
     await chrome.storage.local.remove("jobpilot_token");
     authToken = null;
-    showScreen("login");
-    throw new Error("Session expired. Please sign in again.");
+    showScreen("setup");
+    throw new Error("Session expired. Please reconnect.");
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -85,71 +85,80 @@ async function apiRequest(endpoint, options = {}) {
 // ─── Screen Management ─────────────────────────────────────────────────────
 
 function showScreen(screen) {
-  loginScreen.classList.toggle("hidden", screen !== "login");
+  setupScreen.classList.toggle("hidden", screen !== "setup");
   mainScreen.classList.toggle("hidden", screen !== "main");
 }
 
 
-// ─── Auth ──────────────────────────────────────────────────────────────────
+// ─── Auto-Connect Auth ─────────────────────────────────────────────────────
 
 async function checkAuth() {
+  // First, check if we have a stored token
   const data = await chrome.storage.local.get("jobpilot_token");
   if (data.jobpilot_token) {
     authToken = data.jobpilot_token;
     try {
       // Verify token is still valid
       const me = await apiRequest("/auth/me");
-      userEmail.textContent = me.email;
+      userName.textContent = me.name;
       showScreen("main");
       loadCurrentTab();
+      return;
     } catch {
       authToken = null;
-      showScreen("login");
     }
-  } else {
-    showScreen("login");
+  }
+
+  // No valid token — try to auto-connect to the backend
+  try {
+    const status = await fetch(`${API_BASE}/auth/status`);
+    if (!status.ok) throw new Error("Backend not reachable");
+    const statusData = await status.json();
+
+    if (statusData.is_setup) {
+      // User already set up on dashboard — auto-connect
+      setupMessage.textContent = "Backend found! Connecting...";
+      const res = await fetch(`${API_BASE}/auth/setup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Extension User" }),
+      });
+
+      if (!res.ok) throw new Error("Could not connect");
+      const tokenData = await res.json();
+      authToken = tokenData.access_token;
+      await chrome.storage.local.set({ jobpilot_token: authToken });
+
+      userName.textContent = tokenData.user.name;
+      showScreen("main");
+      loadCurrentTab();
+    } else {
+      // No user set up yet — tell them to go to the dashboard
+      setupMessage.textContent = "Open the dashboard at localhost:3000 and enter your name first.";
+      setupBtn.classList.add("hidden");
+    }
+  } catch {
+    // Backend not running
+    setupMessage.textContent = "Can't reach backend. Make sure JobPilot is running on localhost:8000.";
+    setupBtn.textContent = "Retry";
+    setupBtn.classList.remove("hidden");
   }
 }
 
-loginForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  loginError.classList.add("hidden");
-  setButtonLoading(loginBtn, true);
-
-  try {
-    const email = $("email").value;
-    const password = $("password").value;
-
-    const res = await fetch(`${API_BASE}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Login failed");
-    }
-
-    const data = await res.json();
-    authToken = data.access_token;
-    await chrome.storage.local.set({ jobpilot_token: authToken });
-
-    userEmail.textContent = email;
-    showScreen("main");
-    loadCurrentTab();
-  } catch (err) {
-    loginError.textContent = err.message;
-    loginError.classList.remove("hidden");
-  } finally {
-    setButtonLoading(loginBtn, false);
-  }
+setupBtn.addEventListener("click", () => {
+  setupMessage.textContent = "Connecting...";
+  setupBtn.classList.add("hidden");
+  setupError.classList.add("hidden");
+  checkAuth();
 });
 
-logoutBtn.addEventListener("click", async () => {
+disconnectBtn.addEventListener("click", async () => {
   await chrome.storage.local.remove("jobpilot_token");
   authToken = null;
-  showScreen("login");
+  showScreen("setup");
+  setupMessage.textContent = "Disconnected. Click to reconnect.";
+  setupBtn.textContent = "Reconnect";
+  setupBtn.classList.remove("hidden");
 });
 
 

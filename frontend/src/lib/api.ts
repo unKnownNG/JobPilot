@@ -48,16 +48,16 @@ export interface TokenResponse {
   user: UserResponse;
 }
 
+export interface StatusResponse {
+  is_setup: boolean;
+}
+
 export const auth = {
-  register: (email: string, name: string, password: string) =>
-    request<TokenResponse>("/auth/register", {
+  status: () => request<StatusResponse>("/auth/status"),
+  setup: (name: string) =>
+    request<TokenResponse>("/auth/setup", {
       method: "POST",
-      body: JSON.stringify({ email, name, password }),
-    }),
-  login: (email: string, password: string) =>
-    request<TokenResponse>("/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ name }),
     }),
   me: () => request<UserResponse>("/auth/me"),
   update: (data: { name?: string; preferences?: Record<string, unknown> }) =>
