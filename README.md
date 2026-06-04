@@ -38,17 +38,26 @@ The easiest way to run JobPilot. Docker handles Python, Node.js, and all depende
 #### Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) — free, available for Windows, Mac, and Linux.
-- Make sure Docker Desktop is **open and running** before proceeding (look for the whale icon in your taskbar).
+
+> ⚠️ **Docker must be running before any `docker` command will work.** If you skip this, you'll get a `"Cannot connect to the Docker daemon"` error.
 
 #### Steps
 
-**1. Clone the repository**
+**1. Start Docker Engine first**
+
+- **Windows / Mac:** Open **Docker Desktop** and wait until it shows "Docker Desktop is running" in the system tray.
+- **Linux:**
+  ```bash
+  sudo systemctl start docker
+  ```
+
+**2. Clone the repository**
 ```bash
 git clone https://github.com/unKnownNG/JobPilot.git
 cd JobPilot
 ```
 
-**2. Set up your environment variables**
+**3. Set up your environment variables**
 ```bash
 # On Mac/Linux:
 cp backend/.env.example backend/.env
@@ -64,7 +73,7 @@ DATABASE_URL=sqlite:///./data/db.sqlite3
 LLM_PROVIDER=pollinations               # Free AI, no key needed
 ```
 
-**3. Build and start everything**
+**4. Build and start everything**
 ```bash
 docker compose up --build
 ```
@@ -77,14 +86,14 @@ jobpilot-backend  | INFO:     Application startup complete.
 jobpilot-frontend | ✓ Ready in 0ms
 ```
 
-**4. Open the app**
+**5. Open the app**
 
 - 🌐 **Dashboard** → [http://localhost:3000](http://localhost:3000)
 - 📡 **API Docs** → [http://localhost:8000/docs](http://localhost:8000/docs)
 
 Create an account on the dashboard, upload your resume, and you're good to go.
 
-**5. Stop the app**
+**6. Stop the app**
 ```bash
 docker compose down
 ```
@@ -99,6 +108,14 @@ docker compose down
 | `docker compose logs -f` | View live logs from all services |
 | `docker compose logs backend` | View backend logs only |
 | `docker compose up --build` | Rebuild images after code changes |
+
+**Troubleshooting Docker startup:**
+
+| Error | Fix |
+|---|---|
+| `Cannot connect to the Docker daemon` | Docker Engine is not running — go back to Step 1 |
+| `permission denied` on Linux | Add your user to the docker group: `sudo usermod -aG docker $USER` then log out and back in |
+| Docker Desktop stuck / won't open on Windows | Restart the Docker service: open PowerShell as Admin → `Restart-Service docker` |
 
 ---
 

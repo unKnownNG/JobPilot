@@ -156,20 +156,68 @@ export default function AgentsView({ runs, onRefresh }: Props) {
           </button>
 
           {scoutResult && (
-            <div className={`rounded-xl p-3 text-xs space-y-1 ${scoutResult.error ? "bg-danger/10 border border-danger/20 text-danger" : "bg-success/10 border border-success/20 text-success"}`}>
+            <div className={`rounded-xl p-3 text-xs space-y-1 ${
+              scoutResult.error
+                ? "bg-danger/10 border border-danger/20 text-danger"
+                : (scoutResult.saved === 0 || scoutResult.saved === "0")
+                  ? "bg-warning/10 border border-warning/20"
+                  : "bg-success/10 border border-success/20 text-success"
+            }`}>
               {scoutResult.error ? (
                 <p>{String(scoutResult.error)}</p>
-              ) : (
-                <>
-                  <div className="grid grid-cols-3 gap-2">
-                    {Object.entries(scoutResult).map(([k, v]) => (
-                      <div key={k} className="text-center">
-                        <p className="text-lg font-bold text-fg">{String(v)}</p>
-                        <p className="text-muted-fg capitalize">{k}</p>
-                      </div>
-                    ))}
+              ) : (scoutResult.saved === 0 || scoutResult.saved === "0") ? (
+                /* ── Zero results: prominent warning state ── */
+                <div className="flex flex-col items-center text-center py-2 space-y-2">
+                  <div className="w-10 h-10 rounded-full bg-warning/15 flex items-center justify-center">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5 text-warning">
+                      <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01"/>
+                    </svg>
                   </div>
-                </>
+                  <div>
+                    <p className="text-sm font-semibold text-fg">No matching jobs found</p>
+                    <p className="text-muted-fg mt-1">
+                      Scout searched <span className="text-fg font-medium">{String(scoutResult.fetched ?? 0)}</span> jobs
+                      {scoutResult.sources && Array.isArray(scoutResult.sources) && scoutResult.sources.length > 0
+                        ? <> across <span className="text-fg font-medium">{scoutResult.sources.length} sources</span></>
+                        : null
+                      }, but none met your criteria.
+                    </p>
+                  </div>
+                  <div className="w-full bg-muted/60 rounded-lg p-2.5 text-left space-y-1">
+                    <p className="text-[11px] font-medium text-fg mb-1.5">💡 Try these:</p>
+                    <ul className="text-[11px] text-muted-fg space-y-0.5 list-disc list-inside">
+                      <li>Lower the <span className="text-fg">Min relevance score</span> slider</li>
+                      <li>Use a broader <span className="text-fg">Search query</span> (e.g. "developer" instead of "React developer")</li>
+                      <li>Increase <span className="text-fg">Max jobs to fetch</span> for a wider pool</li>
+                    </ul>
+                  </div>
+                  {/* Still show stats collapsed for power users */}
+                  <details className="w-full text-left">
+                    <summary className="text-[11px] text-muted-fg/60 cursor-pointer hover:text-muted-fg transition">Show detailed stats</summary>
+                    <div className="grid grid-cols-3 gap-2 mt-2">
+                      {Object.entries(scoutResult)
+                        .filter(([k]) => !["sources", "queries_used"].includes(k))
+                        .map(([k, v]) => (
+                        <div key={k} className="text-center overflow-hidden">
+                          <p className="text-sm font-bold text-fg truncate" title={renderValue(v)}>{renderValue(v)}</p>
+                          <p className="text-muted-fg capitalize truncate" title={k.replace(/_/g, " ")}>{k.replace(/_/g, " ")}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              ) : (
+                /* ── Normal success results ── */
+                <div className="grid grid-cols-3 gap-2">
+                  {Object.entries(scoutResult)
+                    .filter(([k]) => !["sources", "queries_used"].includes(k))
+                    .map(([k, v]) => (
+                    <div key={k} className="text-center overflow-hidden">
+                      <p className="text-lg font-bold text-fg truncate" title={renderValue(v)}>{renderValue(v)}</p>
+                      <p className="text-muted-fg capitalize truncate" title={k.replace(/_/g, " ")}>{k.replace(/_/g, " ")}</p>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           )}
