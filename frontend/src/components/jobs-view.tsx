@@ -1,12 +1,215 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { jobs as jobsApi, type JobResponse } from "@/lib/api";
 
 interface Props {
   jobs: JobResponse[];
   onRefresh: () => void;
 }
+
+// ─── Resume Prompt Modal ──────────────────────────────────────────────────────
+
+interface ModalProps {
+  job: JobResponse;
+  onClose: () => void;
+}
+
+function ResumePromptModal({ job, onClose }: ModalProps) {
+  const [prompt, setPrompt] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    jobsApi.generateTailorPrompt(job.id)
+      .then((res) => { if (!cancelled) setPrompt(res.prompt); })
+      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : "Failed to generate prompt"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [job.id]);
+
+  const handleCopy = async () => {
+    const text = prompt;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      textareaRef.current?.select();
+      document.execCommand("copy");
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    }
+  };
+
+  // Close on backdrop click
+  const handleBackdrop = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) onClose();
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.65)", backdropFilter: "blur(6px)" }}
+      onClick={handleBackdrop}
+    >
+      <div
+        className="relative w-full max-w-3xl max-h-[90vh] flex flex-col rounded-2xl border border-border overflow-hidden animate-fade-in"
+        style={{
+          background: "linear-gradient(145deg, hsl(var(--card)) 0%, hsl(var(--bg)) 100%)",
+          boxShadow: "0 32px 64px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)",
+        }}
+      >
+        {/* Decorative glows */}
+        <div className="absolute -top-24 -right-24 w-56 h-56 rounded-full pointer-events-none" style={{ background: "radial-gradient(circle, hsl(var(--primary)/0.15) 0%, transparent 70%)" }} />
+        <div className="absolute -bottom-20 -left-20 w-40 h-40 rounded-full pointer-events-none" style={{ background: "radial-gradient(circle, hsl(var(--accent)/0.12) 0%, transparent 70%)" }} />
+
+        {/* Header */}
+        <div className="relative flex items-start justify-between gap-4 px-6 py-5 border-b border-border shrink-0">
+          <div className="flex items-center gap-3">
+            {/* Wand icon */}
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: "linear-gradient(135deg, hsl(var(--primary)/0.2), hsl(var(--accent)/0.2))", border: "1px solid hsl(var(--primary)/0.25)" }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 text-primary">
+                <path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8 19 13M17.8 6.2 19 5M3 21l9-9M12.2 6.2 11 5" />
+                <path d="m5 3 1 1M19 19l-1-1" />
+              </svg>
+            </div>
+            <div>
+              <h2 className="font-semibold text-fg text-base leading-tight">Tailor Resume for This Job</h2>
+              <p className="text-xs text-muted-fg mt-0.5">
+                <span className="text-fg font-medium">{job.title}</span>
+                {" · "}
+                <span>{job.company}</span>
+                {job.location ? ` · ${job.location}` : ""}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-muted-fg hover:text-fg transition rounded-lg p-1 hover:bg-muted cursor-pointer shrink-0 mt-0.5"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Instructions banner */}
+        <div className="relative px-6 py-3 flex items-center gap-2.5 text-xs border-b border-border shrink-0" style={{ background: "hsl(var(--primary)/0.06)" }}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 text-primary shrink-0">
+            <circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" />
+          </svg>
+          <p className="text-muted-fg leading-relaxed">
+            Copy this AI-generated prompt → open <span className="text-fg font-medium">Claude.ai</span> → paste the prompt + your LaTeX resume → get a perfectly tailored resume
+          </p>
+        </div>
+
+        {/* Content */}
+        <div className="relative flex-1 overflow-hidden flex flex-col min-h-0">
+          {loading ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-4 p-12">
+              {/* Animated ring */}
+              <div className="relative w-14 h-14">
+                <div className="absolute inset-0 rounded-full border-2 border-primary/20" />
+                <div className="absolute inset-0 rounded-full border-2 border-t-primary animate-spin" />
+                <div className="absolute inset-2 rounded-full border border-accent/30 animate-ping" style={{ animationDuration: "2s" }} />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-medium text-fg">Claude Sonnet is analysing this job…</p>
+                <p className="text-xs text-muted-fg mt-1">Crafting a precise resume tailoring prompt</p>
+              </div>
+            </div>
+          ) : error ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-3 p-12 text-center">
+              <div className="w-12 h-12 rounded-2xl bg-danger/10 flex items-center justify-center">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-6 h-6 text-danger">
+                  <circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" />
+                </svg>
+              </div>
+              <p className="text-sm text-danger font-medium">{error}</p>
+              <button
+                onClick={() => {
+                  setError("");
+                  setLoading(true);
+                  jobsApi.generateTailorPrompt(job.id)
+                    .then((res) => setPrompt(res.prompt))
+                    .catch((err) => setError(err instanceof Error ? err.message : "Failed to generate prompt"))
+                    .finally(() => setLoading(false));
+                }}
+                className="text-xs px-4 py-2 rounded-lg bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 transition cursor-pointer"
+              >
+                Try Again
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Prompt textarea */}
+              <div className="flex-1 overflow-auto p-5 min-h-0">
+                <textarea
+                  ref={textareaRef}
+                  readOnly
+                  value={prompt}
+                  className="w-full h-full min-h-[320px] resize-none rounded-xl px-4 py-3.5 text-sm font-mono leading-relaxed outline-none"
+                  style={{
+                    background: "hsl(var(--bg))",
+                    border: "1px solid hsl(var(--border))",
+                    color: "hsl(var(--fg))",
+                    caretColor: "transparent",
+                  }}
+                  spellCheck={false}
+                />
+              </div>
+
+              {/* Footer actions */}
+              <div className="relative px-5 py-4 border-t border-border flex items-center justify-between gap-3 shrink-0">
+                <p className="text-xs text-muted-fg">
+                  {prompt.split(/\s+/).length} words · generated by Claude Sonnet via Pollinations AI
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={onClose}
+                    className="text-xs px-4 py-2 rounded-lg bg-muted text-muted-fg border border-border hover:text-fg transition cursor-pointer"
+                  >
+                    Close
+                  </button>
+                  <button
+                    onClick={handleCopy}
+                    className="relative text-xs px-5 py-2 rounded-lg font-semibold text-white cursor-pointer transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/25 active:translate-y-0 overflow-hidden"
+                    style={{ background: "linear-gradient(135deg, hsl(var(--primary)), #6c5ce7)" }}
+                  >
+                    <span className={`flex items-center gap-1.5 transition-all ${copied ? "opacity-0 scale-90" : "opacity-100 scale-100"}`}>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3.5 h-3.5">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                        <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                      </svg>
+                      Copy Prompt
+                    </span>
+                    {copied && (
+                      <span className="absolute inset-0 flex items-center justify-center gap-1.5">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3.5 h-3.5">
+                          <path d="M20 6L9 17l-5-5" />
+                        </svg>
+                        Copied!
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ─── Jobs View ────────────────────────────────────────────────────────────────
 
 export default function JobsView({ jobs: jobList, onRefresh }: Props) {
   const [showAdd, setShowAdd] = useState(false);
@@ -22,6 +225,9 @@ export default function JobsView({ jobs: jobList, onRefresh }: Props) {
   const [importLoading, setImportLoading] = useState(false);
   const [importResult, setImportResult] = useState<JobResponse | null>(null);
   const [importError, setImportError] = useState("");
+
+  // Tailor resume modal state
+  const [tailorJob, setTailorJob] = useState<JobResponse | null>(null);
 
   const filtered = filter ? jobList.filter((j) => j.status === filter) : jobList;
 
@@ -64,6 +270,11 @@ export default function JobsView({ jobs: jobList, onRefresh }: Props) {
 
   return (
     <div className="space-y-5 max-w-[1200px]">
+
+      {/* Tailor Resume Modal */}
+      {tailorJob && (
+        <ResumePromptModal job={tailorJob} onClose={() => setTailorJob(null)} />
+      )}
 
       {/* ── Import from URL ── */}
       <div className="relative overflow-hidden bg-gradient-to-br from-primary/8 via-card to-accent/5 border border-primary/20 rounded-2xl p-6 shadow-lg shadow-primary/5">
@@ -272,6 +483,24 @@ export default function JobsView({ jobs: jobList, onRefresh }: Props) {
                       className="text-xs px-3 py-1.5 rounded-lg bg-danger/10 text-danger border border-danger/20 hover:bg-danger/20 transition cursor-pointer font-medium">Reject</button>
                   </>
                 )}
+
+                {/* Tailor Resume button */}
+                <button
+                  onClick={() => setTailorJob(job)}
+                  title="Generate a Claude resume-tailoring prompt for this job"
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer hover:-translate-y-0.5 hover:shadow-md"
+                  style={{
+                    background: "linear-gradient(135deg, hsl(var(--primary)/0.12), hsl(var(--accent)/0.12))",
+                    border: "1px solid hsl(var(--primary)/0.25)",
+                    color: "hsl(var(--primary))",
+                  }}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
+                    <path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8 19 13M17.8 6.2 19 5M3 21l9-9M12.2 6.2 11 5" />
+                  </svg>
+                  Tailor
+                </button>
+
                 <a href={job.url} target="_blank" rel="noopener noreferrer"
                   className="text-xs px-3 py-1.5 rounded-lg bg-muted text-muted-fg border border-border hover:text-fg transition font-medium">Open</a>
               </div>

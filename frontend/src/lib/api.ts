@@ -121,6 +121,10 @@ export const jobs = {
       body: JSON.stringify({ url, auto_approve }),
     }),
   stats: () => request<{ total: number; by_status: Record<string, number> }>("/jobs/stats/summary"),
+  generateTailorPrompt: (id: string) =>
+    request<{ prompt: string; job_title: string; company: string }>(`/jobs/${id}/tailor-prompt`, {
+      method: "POST",
+    }),
 };
 
 // --- Resumes ---

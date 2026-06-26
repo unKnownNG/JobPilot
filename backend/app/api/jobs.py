@@ -356,6 +356,127 @@ async def update_job_status(
     return JobResponse.model_validate(job)
 
 
+# ─── Tailor Resume Prompt ───────────────────────────────────────────────────
+
+_TAILOR_SYSTEM = """You are a world-class technical career coach and LaTeX resume expert.
+Your task is to write an extremely detailed, job-specific prompt that a user can paste — along with their LaTeX resume — into Claude to get a perfectly tailored resume.
+
+The prompt you produce should:
+1. Analyse the job posting's requirements, tech stack, seniority, and culture signals
+2. Give Claude precise, actionable instructions on what to emphasise, reword, reorder, or add
+3. List the specific keywords and skills from the JD that must appear naturally in the resume
+4. Specify any structural changes (e.g. move skills section higher, expand or condense bullet points)
+5. Remind Claude to preserve LaTeX formatting and never invent fake experience
+Write the prompt in second-person, as if you are instructing Claude directly.
+Output ONLY the prompt text — no preamble, no markdown headers."""
+
+_TAILOR_USER = """Generate a resume-tailoring prompt for this job posting.
+
+JOB TITLE: {title}
+COMPANY: {company}
+LOCATION: {location}
+WORK TYPE: {work_type}
+RELEVANCE SCORE AGAINST MY CURRENT RESUME: {score}%
+
+JOB DESCRIPTION:
+{description}
+
+PARSED REQUIREMENTS (if available):
+{requirements}
+
+Remember: your output is a prompt that will be pasted into Claude along with my LaTeX resume.
+Make it specific, detailed, and actionable."""
+
+
+class TailorPromptResponse(BaseModel):
+    """Response containing the AI-generated resume tailoring prompt."""
+    prompt: str
+    job_title: str
+    company: str
+
+
+@router.post(
+    "/{job_id}/tailor-prompt",
+    response_model=TailorPromptResponse,
+    summary="Generate a Claude resume-tailoring prompt for a specific job",
+)
+async def generate_tailor_prompt(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Use Claude Sonnet (via Pollinations AI) to generate a rich, job-specific
+    resume-tailoring prompt. The user copies this prompt and pastes it into
+    Claude.ai alongside their LaTeX resume to get a perfectly tailored version.
+    """
+    # Fetch the job
+    result = await db.execute(
+        select(JobPosting).where(
+            JobPosting.id == job_id,
+            JobPosting.user_id == current_user.id,
+        )
+    )
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Build the user message for Claude Sonnet
+    requirements_text = "Not parsed yet."
+    if job.requirements:
+        req = job.requirements
+        parts = []
+        if req.get("required_skills"):
+            parts.append("Required skills: " + ", ".join(req["required_skills"]))
+        if req.get("nice_to_have"):
+            parts.append("Nice-to-have: " + ", ".join(req["nice_to_have"]))
+        if req.get("experience_years"):
+            parts.append(f"Experience: {req['experience_years']} years")
+        if parts:
+            requirements_text = "\n".join(parts)
+
+    user_msg = _TAILOR_USER.format(
+        title=job.title,
+        company=job.company,
+        location=job.location or "Not specified",
+        work_type=job.work_type or "Not specified",
+        score=round(job.relevance_score, 1) if job.relevance_score else "N/A",
+        description=(job.description or "No description available.")[:4000],
+        requirements=requirements_text,
+    )
+
+    try:
+        generated_prompt = await llm_provider.generate(
+            prompt=user_msg,
+            system_prompt=_TAILOR_SYSTEM,
+            model="claude-sonnet",  # Claude Sonnet via Pollinations AI
+            temperature=0.6,
+        )
+    except Exception as e:
+        print(f"[TAILOR-PROMPT] Claude Sonnet failed, falling back: {e}")
+        # Fallback to openai-large if claude-sonnet is unavailable
+        try:
+            generated_prompt = await llm_provider.generate(
+                prompt=user_msg,
+                system_prompt=_TAILOR_SYSTEM,
+                model="openai-large",
+                temperature=0.6,
+            )
+        except Exception as e2:
+            raise HTTPException(
+                status_code=503,
+                detail=f"AI model unavailable. Please try again shortly. ({e2})",
+            )
+
+    print(f"[TAILOR-PROMPT] Generated prompt for '{job.title}' @ {job.company} (len={len(generated_prompt)})")
+
+    return TailorPromptResponse(
+        prompt=generated_prompt.strip(),
+        job_title=job.title,
+        company=job.company,
+    )
+
+
 @router.get(
     "/stats/summary",
     summary="Get job discovery statistics",
